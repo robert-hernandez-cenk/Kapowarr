@@ -208,6 +208,7 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
                     self.title
                 )
                 self._state = DownloadState.FAILED_STATE
+                pop_cached_nzb(self.download_link)
 
         return
 

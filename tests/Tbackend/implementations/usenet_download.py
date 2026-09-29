@@ -125,13 +125,43 @@ class usenet_download_outages(unittest.TestCase):
         download._state = DownloadState.QUEUED_STATE
 
         with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
-                patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+                patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger, \
+                patch(f"{DOWNLOAD_MODULE}.pop_cached_nzb") as pop:
             download.run()
 
         self.assertIsNone(download.external_id)
         self.assertEqual(download.state, DownloadState.FAILED_STATE)
         self.assertWarnedWithoutLink(logger)
         client.add_download.assert_called_once()
+        # The NZB is never uploaded, so nothing will ever pop it otherwise.
+        pop.assert_called_once_with(LINK)
+
+    def test_rejected_download_drops_cached_nzb(self):
+        # Uses the real cache instead of a mocked pop_cached_nzb, to prove
+        # the bytes are actually released, not just that the function is
+        # called.
+        from backend.implementations import usenet as usenet_module
+        nzb = usenet_module.NzbFile(
+            name="Batman 001", filename="Batman 001.nzb", content=b"<nzb/>"
+        )
+        usenet_module._nzb_cache[LINK] = nzb
+        self.addCleanup(usenet_module._nzb_cache.pop, LINK, None)
+
+        client = MagicMock()
+        client.id = 3
+        client.add_download.side_effect = ClientNotWorking(
+            BrokenClientReason.FAILED_PROCESSING_RESPONSE
+        )
+        download = make_download(client)
+        download._external_id = None
+        download._state = DownloadState.QUEUED_STATE
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.LOGGER"):
+            download.run()
+
+        self.assertEqual(download.state, DownloadState.FAILED_STATE)
+        self.assertNotIn(LINK, usenet_module._nzb_cache)
 
     def test_connection_error_retries_without_regrabbing(self):
         client = MagicMock()
@@ -144,11 +174,13 @@ class usenet_download_outages(unittest.TestCase):
         download._state = DownloadState.QUEUED_STATE
 
         with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
-                patch(f"{DOWNLOAD_MODULE}.LOGGER"):
+                patch(f"{DOWNLOAD_MODULE}.LOGGER"), \
+                patch(f"{DOWNLOAD_MODULE}.pop_cached_nzb") as pop:
             download.run()
 
         self.assertIsNone(download.external_id)
         self.assertEqual(download.state, DownloadState.QUEUED_STATE)
+        pop.assert_not_called()
 
         with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
                 patch(f"{DOWNLOAD_MODULE}.LOGGER"):
