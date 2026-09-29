@@ -4,7 +4,8 @@ from unittest.mock import MagicMock, patch
 
 from backend.base.definitions import DownloadClientIdentifier, SeedingHandling
 from backend.features.download_queue import (DownloadHandler,
-                                             get_external_post_processor)
+                                             get_external_post_processor,
+                                             import_completed_download)
 from backend.features.post_processing import (PostProcessorTorrentsComplete,
                                               PostProcessorTorrentsCopy,
                                               PostProcessorUsenet)
@@ -50,3 +51,25 @@ class download_handler_logging(unittest.TestCase):
         message = " ".join(map(str, logger.info.call_args_list[0].args))
         self.assertNotIn("SECRET", message)
         self.assertIn("apikey=<redacted>", message)
+
+
+class completed_download_import(unittest.TestCase):
+    def test_successful_import(self):
+        pp = MagicMock()
+        self.assertTrue(import_completed_download(pp))
+        pp.success.assert_called_once()
+        pp.ctx.remove_from_queue.assert_not_called()
+
+    def test_crash_during_import_is_contained(self):
+        pp = MagicMock()
+        pp.success.side_effect = NotADirectoryError(20, "Not a directory")
+
+        with patch("backend.features.download_queue.LOGGER") as logger:
+            self.assertFalse(import_completed_download(pp))
+
+        logger.exception.assert_called_once()
+        pp.ctx.remove_from_queue.assert_called_once()
+        # Files may already be in the library, so nothing may be deleted
+        pp.ctx.delete_file.assert_not_called()
+        pp.failed.assert_not_called()
+        pp.perm_failed.assert_not_called()

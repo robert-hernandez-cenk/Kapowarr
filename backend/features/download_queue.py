@@ -69,6 +69,31 @@ def get_external_post_processor(
         assert_never(seeding_handling)
 
 
+def import_completed_download(pp: PostProcessor) -> bool:
+    """Run the post-processing of a completed download, making sure that a
+    crash doesn't leave the download stuck in the queue.
+
+    Args:
+        pp (PostProcessor): The post-processor of the download.
+
+    Returns:
+        bool: Whether the post-processing succeeded.
+    """
+    try:
+        pp.success()
+        return True
+
+    except Exception:
+        # Don't delete anything: the files could already be (partially)
+        # moved into the library.
+        LOGGER.exception(
+            f'Post-processing of download {pp.download.id} failed; '
+            'files were left where they are:'
+        )
+        pp.ctx.remove_from_queue()
+        return False
+
+
 class DownloadHandler(metaclass=Singleton):
     queue: List[Download] = []
 
@@ -487,7 +512,7 @@ class DownloadHandler(metaclass=Singleton):
                     or download.identifier == DownloadClientIdentifier.USENET
                 ):
                     download.remove_from_client(delete_files=False)
-                pp.success()
+                import_completed_download(pp)
                 self.queue.remove(download)
                 break
 
