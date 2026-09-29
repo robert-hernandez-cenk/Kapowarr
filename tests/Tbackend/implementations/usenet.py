@@ -157,3 +157,29 @@ class nzb_link_redaction(unittest.TestCase):
         link = "https://idx/getnzb/a.nzb?t=get&id=abc"
         result = redact_nzb_link(link)
         self.assertEqual(result, link)
+
+    def test_does_not_redact_unrelated_parameters_ending_in_r_or_i(self):
+        # Parameters whose names end in 'r' or 'i' should not be redacted
+        # unless they are exactly 'r' or 'i'
+        link = ("https://idx/a.nzb?dir=/tmp/x&user=bob&ui=dark&referer=http"
+                "&counter=5&download_dir=/path&id=abc&apikey=SECRET&r=KEY&i=ID")
+        result = redact_nzb_link(link)
+
+        # Unrelated parameters should be unchanged
+        self.assertIn("dir=/tmp/x", result)
+        self.assertIn("user=bob", result)
+        self.assertIn("ui=dark", result)
+        self.assertIn("referer=http", result)
+        self.assertIn("counter=5", result)
+        self.assertIn("download_dir=/path", result)
+        self.assertIn("id=abc", result)
+
+        # Sensitive parameters should be redacted
+        self.assertIn("apikey=<redacted>", result)
+        self.assertIn("r=<redacted>", result)
+        self.assertIn("i=<redacted>", result)
+
+        # Original secret values should not appear
+        self.assertNotIn("SECRET", result)
+        self.assertNotIn("r=KEY", result)
+        self.assertNotIn("i=ID", result)

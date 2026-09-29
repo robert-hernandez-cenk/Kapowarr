@@ -24,7 +24,7 @@ content_disposition_filename_regex = compile(
     IGNORECASE
 )
 nzb_apikey_regex = compile(
-    r'((?:apikey|api_key|[ri])=)[^&\s]+',
+    r'(?:^|(?<=[?&]))(apikey|api_key|r|i)=([^&\s]+)',
     IGNORECASE
 )
 
@@ -33,7 +33,8 @@ def redact_nzb_link(link: str) -> str:
     """Redact sensitive parameters from an NZB indexer link.
 
     Masks the values of apikey, api_key, r, and i parameters (case-insensitive)
-    that appear as name=value pairs in the query string.
+    that appear as name=value pairs in the query string. Only redacts whole
+    parameter names (not partial matches within other parameter names).
 
     Args:
         link (str): The NZB link, possibly containing sensitive parameters.
@@ -41,7 +42,7 @@ def redact_nzb_link(link: str) -> str:
     Returns:
         str: The link with sensitive parameter values replaced with <redacted>.
     """
-    return nzb_apikey_regex.sub(r'\1<redacted>', link)
+    return nzb_apikey_regex.sub(r'\1=<redacted>', link)
 
 
 @dataclass(frozen=True)
