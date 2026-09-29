@@ -3,10 +3,12 @@ from contextlib import ExitStack
 from threading import Event
 from unittest.mock import MagicMock, patch
 
-from backend.base.custom_exceptions import (DownloadLinkBroken,
+from backend.base.custom_exceptions import (ClientNotWorking,
+                                            CredentialInvalid,
+                                            DownloadLinkBroken,
                                             EnqueuingDownloadFailure,
                                             ExternalClientNotFound)
-from backend.base.definitions import (BlocklistReason,
+from backend.base.definitions import (BlocklistReason, BrokenClientReason,
                                       DownloadClientIdentifier,
                                       DownloadService, DownloadState,
                                       EnqueuingDownloadFailureReason)
@@ -39,11 +41,128 @@ def make_download(client):
     return download
 
 
-def status(state, storage=None):
+def status(state, storage=None, fail_message=None):
     return {
         "size": 10, "progress": 100.0, "speed": 0.0,
-        "state": state, "storage": storage
+        "state": state, "storage": storage, "fail_message": fail_message
     }
+
+
+def outages():
+    return (
+        ClientNotWorking(BrokenClientReason.CONNECTION_ERROR),
+        CredentialInvalid()
+    )
+
+
+class usenet_download_outages(unittest.TestCase):
+    def assertWarnedWithoutLink(self, logger):
+        self.assertTrue(logger.warning.called)
+        for call in logger.warning.call_args_list:
+            self.assertNotIn(LINK, " ".join(map(str, call.args)))
+
+    def test_status_check_survives_outage(self):
+        for error in outages():
+            with self.subTest(error=type(error).__name__):
+                client = MagicMock()
+                client.get_download.side_effect = error
+                download = make_download(client)
+
+                with patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+                    download.update_status()
+
+                self.assertEqual(
+                    download.state, DownloadState.DOWNLOADING_STATE
+                )
+                self.assertEqual(download.external_id, "nzo_1")
+                self.assertWarnedWithoutLink(logger)
+
+    def test_add_survives_outage(self):
+        for error in outages():
+            with self.subTest(error=type(error).__name__):
+                client = MagicMock()
+                client.id = 3
+                client.add_download.side_effect = error
+                download = make_download(client)
+                download._external_id = None
+                download._state = DownloadState.QUEUED_STATE
+
+                with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                        patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+                    download.run()
+
+                self.assertIsNone(download.external_id)
+                self.assertEqual(download.state, DownloadState.QUEUED_STATE)
+                self.assertWarnedWithoutLink(logger)
+
+    def test_status_check_retries_add(self):
+        client = MagicMock()
+        client.id = 3
+        client.add_download.side_effect = [
+            ClientNotWorking(BrokenClientReason.CONNECTION_ERROR), "nzo_9"
+        ]
+        download = make_download(client)
+        download._external_id = None
+        download._state = DownloadState.QUEUED_STATE
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.LOGGER"):
+            download.run()
+            download.update_status()
+
+        self.assertEqual(client.add_download.call_count, 2)
+        self.assertEqual(download.external_id, "nzo_9")
+
+    def test_failed_download_is_not_retried(self):
+        client = MagicMock()
+        download = make_download(client)
+        download._external_id = None
+        download._state = DownloadState.FAILED_STATE
+
+        download.update_status()
+
+        client.add_download.assert_not_called()
+        self.assertEqual(download.state, DownloadState.FAILED_STATE)
+
+    def test_remove_survives_outage(self):
+        for error in outages():
+            with self.subTest(error=type(error).__name__):
+                client = MagicMock()
+                client.delete_download.side_effect = error
+                download = make_download(client)
+
+                with patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+                    download.remove_from_client(delete_files=True)
+
+                self.assertWarnedWithoutLink(logger)
+
+    def test_fail_message_is_logged_once(self):
+        client = MagicMock()
+        client.get_download.return_value = status(
+            DownloadState.FAILED_STATE, fail_message="Out of retention"
+        )
+        download = make_download(client)
+
+        with patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+            download.update_status()
+            download.update_status()
+
+        self.assertEqual(download.state, DownloadState.FAILED_STATE)
+        logger.warning.assert_called_once_with(
+            "Usenet download failed in client: %s", "Out of retention"
+        )
+
+    def test_missing_fail_message(self):
+        client = MagicMock()
+        client.get_download.return_value = status(DownloadState.FAILED_STATE)
+        download = make_download(client)
+
+        with patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+            download.update_status()
+
+        logger.warning.assert_called_once_with(
+            "Usenet download failed in client: %s", "unknown reason"
+        )
 
 
 class usenet_download(unittest.TestCase):

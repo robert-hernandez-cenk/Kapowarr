@@ -4,7 +4,9 @@ from os.path import basename, exists, join
 from threading import Event
 from typing import Any, Dict, Protocol, Tuple, Union, runtime_checkable
 
-from backend.base.custom_exceptions import (DownloadLinkBroken,
+from backend.base.custom_exceptions import (ClientNotWorking,
+                                            CredentialInvalid,
+                                            DownloadLinkBroken,
                                             EnqueuingDownloadFailure,
                                             ExternalClientNotFound,
                                             IssueNotFound)
@@ -146,20 +148,30 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         return
 
     def run(self) -> None:
-        if (
-            self._restored
-            and isinstance(self.external_client, FindsDownloadsByName)
-        ):
-            existing_id = self.external_client.find_download(self.title)
-            if existing_id:
-                LOGGER.info(
-                    "Download already in client, reusing job: %s", self.title
-                )
-                self._external_id = existing_id
-                pop_cached_nzb(self.download_link)
-                return
+        self._add_to_client()
+        return
 
+    def _add_to_client(self) -> None:
+        """Add the download to the external client, or pick up the job that
+        is already there if the download was restored from the database.
+        If the client can't be reached, `external_id` stays `None` and the
+        state stays QUEUED, so that a later status check tries again.
+        """
         try:
+            if (
+                self._restored
+                and isinstance(self.external_client, FindsDownloadsByName)
+            ):
+                existing_id = self.external_client.find_download(self.title)
+                if existing_id:
+                    LOGGER.info(
+                        "Download already in client, reusing job: %s",
+                        self.title
+                    )
+                    self._external_id = existing_id
+                    pop_cached_nzb(self.download_link)
+                    return
+
             self._external_id = self.external_client.add_download(
                 self.download_link,
                 RemoteMappings.local_to_remote(
@@ -172,13 +184,30 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         except DownloadLinkBroken:
             self._state = DownloadState.FAILED_STATE
 
+        except (ClientNotWorking, CredentialInvalid):
+            LOGGER.warning(
+                "Can't add Usenet download to the client, will try again: %s",
+                self.title
+            )
+
         return
 
     def update_status(self) -> None:
         if not self.external_id:
+            if self.state == DownloadState.QUEUED_STATE:
+                self._add_to_client()
             return
 
-        status = self.external_client.get_download(self.external_id)
+        try:
+            status = self.external_client.get_download(self.external_id)
+
+        except (ClientNotWorking, CredentialInvalid):
+            LOGGER.warning(
+                "Can't get the status of Usenet download from the client: %s",
+                self.title
+            )
+            return
+
         if status is None:
             self._state = DownloadState.CANCELED_STATE
             return
@@ -197,6 +226,15 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         new_state: DownloadState = status['state']
         if new_state == DownloadState.IMPORTING_STATE:
             new_state = self._resolve_completed_files(status.get('storage'))
+
+        elif (
+            new_state == DownloadState.FAILED_STATE
+            and self.state != DownloadState.FAILED_STATE
+        ):
+            LOGGER.warning(
+                "Usenet download failed in client: %s",
+                status.get("fail_message") or "unknown reason"
+            )
 
         self._state = new_state
         return
@@ -239,7 +277,17 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         if not self.external_id:
             return
 
-        self.external_client.delete_download(self.external_id, delete_files)
+        try:
+            self.external_client.delete_download(
+                self.external_id, delete_files
+            )
+
+        except (ClientNotWorking, CredentialInvalid):
+            LOGGER.warning(
+                "Can't remove Usenet download from the client: %s",
+                self.title
+            )
+
         return
 
     def stop(
