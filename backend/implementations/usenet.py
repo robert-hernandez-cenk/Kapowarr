@@ -23,6 +23,25 @@ content_disposition_filename_regex = compile(
     r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?',
     IGNORECASE
 )
+nzb_apikey_regex = compile(
+    r'((?:apikey|api_key|[ri])=)[^&\s]+',
+    IGNORECASE
+)
+
+
+def redact_nzb_link(link: str) -> str:
+    """Redact sensitive parameters from an NZB indexer link.
+
+    Masks the values of apikey, api_key, r, and i parameters (case-insensitive)
+    that appear as name=value pairs in the query string.
+
+    Args:
+        link (str): The NZB link, possibly containing sensitive parameters.
+
+    Returns:
+        str: The link with sensitive parameter values replaced with <redacted>.
+    """
+    return nzb_apikey_regex.sub(r'\1<redacted>', link)
 
 
 @dataclass(frozen=True)
@@ -128,10 +147,10 @@ def fetch_nzb(link: str) -> NzbFile:
             response = session.get(link)
 
     except RequestException:
-        raise DownloadLinkBroken(link)
+        raise DownloadLinkBroken(redact_nzb_link(link))
 
     if not response.ok or not is_nzb(response.content):
-        raise DownloadLinkBroken(link)
+        raise DownloadLinkBroken(redact_nzb_link(link))
 
     name = (
         extract_nzb_name(response.headers, response.content)

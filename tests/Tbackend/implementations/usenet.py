@@ -4,7 +4,8 @@ from unittest.mock import MagicMock, patch
 from backend.base.custom_exceptions import DownloadLinkBroken
 from backend.implementations import usenet
 from backend.implementations.usenet import (extract_nzb_name, fetch_nzb,
-                                            is_nzb, pop_cached_nzb)
+                                            is_nzb, pop_cached_nzb,
+                                            redact_nzb_link)
 
 NZB_CONTENT = b"""<?xml version="1.0" encoding="iso-8859-1" ?>
 <!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
@@ -103,3 +104,56 @@ class nzb_fetching(unittest.TestCase):
             self.assertEqual(
                 fetch_nzb("https://idx/b.nzb").name, "Unknown release"
             )
+
+    def test_broken_link_with_apikey_redacts(self):
+        with patch("backend.implementations.usenet.Session") as session_cls:
+            session = session_cls.return_value.__enter__.return_value
+            session.get.return_value = fake_response(
+                b'<error code="300" description="No such item"/>'
+            )
+            link = "https://idx/getnzb/a.nzb?t=get&id=abc&apikey=SECRET"
+            with self.assertRaises(DownloadLinkBroken) as cm:
+                fetch_nzb(link)
+            self.assertNotIn("SECRET", str(cm.exception.link))
+            self.assertIn("apikey=<redacted>", str(cm.exception.link))
+
+
+class nzb_link_redaction(unittest.TestCase):
+    def test_redacts_apikey_parameter(self):
+        link = "https://idx/getnzb/a.nzb?t=get&id=abc&apikey=KEY123"
+        result = redact_nzb_link(link)
+        self.assertIn("apikey=<redacted>", result)
+        self.assertNotIn("KEY123", result)
+        self.assertIn("id=abc", result)
+
+    def test_redacts_api_key_parameter(self):
+        link = "https://idx/getnzb/a.nzb?api_key=SECRET456"
+        result = redact_nzb_link(link)
+        self.assertIn("api_key=<redacted>", result)
+        self.assertNotIn("SECRET456", result)
+
+    def test_redacts_r_parameter(self):
+        link = "https://api.nzb.su/getnzb/GUID.nzb&i=123&r=KEY789"
+        result = redact_nzb_link(link)
+        self.assertIn("r=<redacted>", result)
+        self.assertNotIn("KEY789", result)
+        self.assertIn("i=<redacted>", result)
+
+    def test_redacts_i_parameter(self):
+        link = "https://api.nzb.su/getnzb/GUID.nzb?i=456&r=KEY"
+        result = redact_nzb_link(link)
+        self.assertIn("i=<redacted>", result)
+        self.assertNotIn("456", result)
+
+    def test_case_insensitive_redaction(self):
+        link = "https://idx/a.nzb?ApiKey=UPPER&r=LOWER&API_KEY=MIX"
+        result = redact_nzb_link(link)
+        self.assertNotIn("UPPER", result)
+        self.assertNotIn("LOWER", result)
+        self.assertNotIn("MIX", result)
+        self.assertEqual(result.count("<redacted>"), 3)
+
+    def test_leaves_keyless_link_unchanged(self):
+        link = "https://idx/getnzb/a.nzb?t=get&id=abc"
+        result = redact_nzb_link(link)
+        self.assertEqual(result, link)
