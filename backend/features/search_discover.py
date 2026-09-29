@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 from time import time
 from typing import Dict, List
 
-from backend.base.definitions import SearchResultData
+from backend.base.definitions import DownloadType, SearchResultData
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import extract_year_from_date
 from backend.base.logging import LOGGER
-from backend.features.search_full import choose_downloads, protocol_rank
+from backend.features.search_full import (choose_downloads, protocol_rank,
+                                          usenet_client_available)
 from backend.implementations.indexer_client_manager import IndexerClients
 from backend.implementations.matching import (check_search_result_match,
                                               match_title)
@@ -24,10 +25,15 @@ async def _get_all_new_releases() -> List[SearchResultData]:
     Returns:
         List[SearchResultData]: The list of downloads.
     """
+    usenet_available = usenet_client_available()
     indexers = [
         indexer
         for indexer in IndexerClients.get_all_clients()
         if indexer.get_indexer_data()["enabled"]
+        and (
+            usenet_available
+            or indexer.download_type != DownloadType.USENET
+        )
     ]
 
     last_rss_sync = (

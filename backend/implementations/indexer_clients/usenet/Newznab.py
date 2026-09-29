@@ -5,7 +5,7 @@ Indexer client for Newznab compatible Usenet indexers
 (NZBGeek, NZB.su, DrunkenSlug, etc.)
 """
 
-from asyncio import run
+from asyncio import TimeoutError as AsyncTimeoutError, run
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -302,7 +302,7 @@ class NewznabIndexer(BaseIndexerClient):
                     }
                 )
 
-            except ClientError:
+            except (ClientError, AsyncTimeoutError):
                 raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
 
         try:

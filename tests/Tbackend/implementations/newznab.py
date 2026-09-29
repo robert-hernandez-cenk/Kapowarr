@@ -1,12 +1,13 @@
 import unittest
+from asyncio import TimeoutError as AsyncTimeoutError
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 from aiohttp import ClientError
 
 from backend.base.custom_exceptions import ClientNotWorking, CredentialInvalid
-from backend.base.definitions import (DownloadType, QueryKeys,
-                                      SearchAction, SpecialVersion)
+from backend.base.definitions import (BrokenClientReason, DownloadType,
+                                      QueryKeys, SearchAction, SpecialVersion)
 from backend.base.helpers import CommaList
 from backend.implementations.indexer_clients.usenet.Newznab import (
     NewznabError, NewznabIndexer, newznab_api_url, parse_newznab_response)
@@ -219,6 +220,19 @@ class newznab_test(unittest.TestCase):
                 NewznabIndexer.test(
                     "https://indexer.example", api_key="KEY", categories="7030"
                 )
+
+    def test_timeout(self):
+        with patch(
+            f"{MODULE}.AsyncSession",
+            return_value=FakeSession([AsyncTimeoutError()])
+        ):
+            with self.assertRaises(ClientNotWorking) as cm:
+                NewznabIndexer.test(
+                    "https://indexer.example", api_key="KEY", categories="7030"
+                )
+        self.assertEqual(
+            cm.exception.reason, BrokenClientReason.CONNECTION_ERROR
+        )
 
 
 class usenet_query_builder(unittest.TestCase):

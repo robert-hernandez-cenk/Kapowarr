@@ -1,6 +1,8 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+from backend.base.custom_exceptions import ExternalClientNotFound
 from backend.base.definitions import (DownloadType, QueryKeys, QueryResult,
                                       SearchAction, SpecialVersion)
 from backend.features.search_full import SearchCoordinator, protocol_rank
@@ -60,6 +62,49 @@ def result(link, download_type, match=True):
         "issue_number": 1.0,
         "annual": False
     }
+
+
+def indexer_of(download_type):
+    indexer = MagicMock()
+    indexer.download_type = download_type
+    indexer.get_indexer_data.return_value = {"enabled": True}
+    return indexer
+
+
+class usenet_indexers_need_client(unittest.TestCase):
+    def coordinator_indexers(self, clients):
+        ddl = indexer_of(DownloadType.DDL)
+        usenet_a = indexer_of(DownloadType.USENET)
+        usenet_b = indexer_of(DownloadType.USENET)
+        module = "backend.features.search_full"
+        with patch(f"{module}.Volume"), \
+                patch(f"{module}.QueryBuilders"), \
+                patch(f"{module}.SearchActionPlanner"), \
+                patch(f"{module}.IndexerClients") as indexers, \
+                patch(f"{module}.ExternalClients", clients), \
+                patch(f"{module}.LOGGER"):
+            indexers.get_all_clients.return_value = [ddl, usenet_a, usenet_b]
+            coordinator = SearchCoordinator(1, [1])
+
+        return (
+            [t["indexer"] for t in coordinator.indexers],
+            ddl, usenet_a, usenet_b
+        )
+
+    def test_skipped_without_usenet_client(self):
+        clients = MagicMock()
+        clients.get_least_used_client.side_effect = ExternalClientNotFound(-1)
+        indexers, ddl, _, _ = self.coordinator_indexers(clients)
+
+        self.assertEqual(indexers, [ddl])
+        clients.get_least_used_client.assert_called_once_with(
+            DownloadType.USENET
+        )
+
+    def test_kept_with_usenet_client(self):
+        clients = MagicMock()
+        indexers, ddl, usenet_a, usenet_b = self.coordinator_indexers(clients)
+        self.assertEqual(indexers, [ddl, usenet_a, usenet_b])
 
 
 class run_iteration(unittest.IsolatedAsyncioTestCase):

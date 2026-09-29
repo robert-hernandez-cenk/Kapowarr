@@ -3,6 +3,7 @@
 from asyncio import gather, run
 from typing import Dict, List, Set, Tuple, TypedDict, TypeVar, Union
 
+from backend.base.custom_exceptions import ExternalClientNotFound
 from backend.base.definitions import (DownloadType, IndexerClient, IssueData,
                                       MatchedSearchResultData, QueryBuilder,
                                       QueryKeys, QueryResult, SearchAction,
@@ -12,6 +13,7 @@ from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import (check_overlapping_issues,
                                   extract_year_from_date, force_range)
 from backend.base.logging import LOGGER
+from backend.implementations.external_client_manager import ExternalClients
 from backend.implementations.indexer_client_manager import IndexerClients
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.query_builder_manager import QueryBuilders
@@ -31,6 +33,24 @@ PROTOCOL_PREFERENCE: Tuple[DownloadType, ...] = (
     DownloadType.TORRENT
 )
 "Order of preference of download types, for results that rank equally"
+
+
+def usenet_client_available() -> bool:
+    """Check whether there is an enabled Usenet download client. Without one,
+    results from Usenet indexers can't be downloaded.
+
+    Returns:
+        bool: Whether there is an enabled Usenet client.
+    """
+    try:
+        ExternalClients.get_least_used_client(DownloadType.USENET)
+        return True
+
+    except ExternalClientNotFound:
+        LOGGER.debug(
+            "No enabled Usenet download client, skipping Usenet indexers"
+        )
+        return False
 
 
 def protocol_rank(download_type: Union[DownloadType, int, None]) -> int:
@@ -82,8 +102,15 @@ class SearchCoordinator:
         self.is_issue_search = len(self.wanted_issues) == 1
 
         self.indexers: List[IndexerTeam] = []
+        usenet_available = usenet_client_available()
         for client in IndexerClients.get_all_clients():
             if not client.get_indexer_data()["enabled"]:
+                continue
+
+            if (
+                client.download_type == DownloadType.USENET
+                and not usenet_available
+            ):
                 continue
 
             self.indexers.append({
