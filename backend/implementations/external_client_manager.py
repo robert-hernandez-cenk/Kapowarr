@@ -574,6 +574,28 @@ class ExternalClients:
         raise ExternalClientNotFound(-1)
 
     @classmethod
+    def has_enabled_client(cls, download_type: DownloadType) -> bool:
+        """Check whether there is an enabled external client for a download
+        type. Unlike `get_least_used_client`, this doesn't raise or log
+        anything, so it's safe to use as a plain availability check.
+
+        Args:
+            download_type (DownloadType): The download type to check for.
+
+        Returns:
+            bool: Whether an enabled client exists for the download type.
+        """
+        return get_db().execute("""
+            SELECT 1
+            FROM external_download_clients
+            WHERE download_type = ?
+                AND enabled = 1
+            LIMIT 1;
+            """,
+            (download_type.value,)
+        ).exists() is not None
+
+    @classmethod
     def delete_client(cls, client_id: int) -> None:
         """Delete a client.
 

@@ -2,7 +2,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from backend.base.custom_exceptions import ExternalClientNotFound
 from backend.base.definitions import (DownloadType, QueryKeys, QueryResult,
                                       SearchAction, SpecialVersion)
 from backend.features.search_full import SearchCoordinator, protocol_rank
@@ -72,7 +71,7 @@ def indexer_of(download_type):
 
 
 class usenet_indexers_need_client(unittest.TestCase):
-    def coordinator_indexers(self, clients):
+    def coordinator_indexers(self, clients, indexer_list=None):
         ddl = indexer_of(DownloadType.DDL)
         usenet_a = indexer_of(DownloadType.USENET)
         usenet_b = indexer_of(DownloadType.USENET)
@@ -83,7 +82,11 @@ class usenet_indexers_need_client(unittest.TestCase):
                 patch(f"{module}.IndexerClients") as indexers, \
                 patch(f"{module}.ExternalClients", clients), \
                 patch(f"{module}.LOGGER"):
-            indexers.get_all_clients.return_value = [ddl, usenet_a, usenet_b]
+            indexers.get_all_clients.return_value = (
+                indexer_list
+                if indexer_list is not None
+                else [ddl, usenet_a, usenet_b]
+            )
             coordinator = SearchCoordinator(1, [1])
 
         return (
@@ -93,18 +96,29 @@ class usenet_indexers_need_client(unittest.TestCase):
 
     def test_skipped_without_usenet_client(self):
         clients = MagicMock()
-        clients.get_least_used_client.side_effect = ExternalClientNotFound(-1)
+        clients.has_enabled_client.return_value = False
         indexers, ddl, _, _ = self.coordinator_indexers(clients)
 
         self.assertEqual(indexers, [ddl])
-        clients.get_least_used_client.assert_called_once_with(
+        clients.has_enabled_client.assert_called_once_with(
             DownloadType.USENET
         )
 
     def test_kept_with_usenet_client(self):
         clients = MagicMock()
+        clients.has_enabled_client.return_value = True
         indexers, ddl, usenet_a, usenet_b = self.coordinator_indexers(clients)
         self.assertEqual(indexers, [ddl, usenet_a, usenet_b])
+
+    def test_availability_not_checked_without_usenet_indexer(self):
+        clients = MagicMock()
+        ddl = indexer_of(DownloadType.DDL)
+        indexers, _, _, _ = self.coordinator_indexers(
+            clients, indexer_list=[ddl]
+        )
+
+        self.assertEqual(indexers, [ddl])
+        clients.has_enabled_client.assert_not_called()
 
 
 class run_iteration(unittest.IsolatedAsyncioTestCase):

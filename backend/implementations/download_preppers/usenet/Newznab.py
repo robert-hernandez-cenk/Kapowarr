@@ -4,7 +4,6 @@ from typing import List, Union
 
 from backend.base.custom_exceptions import (DownloadLinkBroken,
                                             EnqueuingDownloadFailure,
-                                            ExternalClientNotFound,
                                             IssueNotFound)
 from backend.base.definitions import (BlocklistReason, Download,
                                       DownloadClientIdentifier,
@@ -49,9 +48,7 @@ class NewznabPrepper(DownloadPrepper):
     def get_downloads(self) -> List[Download]:
         indexer = IndexerClients.get_client(self.indexer_id)
 
-        try:
-            ExternalClients.get_least_used_client(DownloadType.USENET)
-        except ExternalClientNotFound:
+        if not ExternalClients.has_enabled_client(DownloadType.USENET):
             raise EnqueuingDownloadFailure(
                 EnqueuingDownloadFailureReason.NO_USENET_CLIENT
             )

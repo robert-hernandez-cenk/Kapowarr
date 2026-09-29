@@ -11,6 +11,7 @@ from backend.base.custom_exceptions import (ClientNotWorking,
 from backend.base.definitions import (BlocklistReason, BrokenClientReason,
                                       DownloadClientIdentifier,
                                       DownloadService, DownloadState,
+                                      DownloadType,
                                       EnqueuingDownloadFailureReason)
 from backend.implementations.download_clients.Usenet import UsenetDownload
 from backend.implementations.download_preppers.usenet.Newznab import \
@@ -406,12 +407,29 @@ class newznab_prepper(unittest.TestCase):
         self.assertEqual(cm.exception.reason, reason)
 
     def test_no_usenet_client(self):
-        self.external.get_least_used_client.side_effect = \
-            ExternalClientNotFound(-1)
+        self.external.has_enabled_client.return_value = False
         with self.assertRaises(EnqueuingDownloadFailure) as cm:
             self.prepper().get_downloads()
         self.assertReason(cm, EnqueuingDownloadFailureReason.NO_USENET_CLIENT)
+        self.external.has_enabled_client.assert_called_once_with(
+            DownloadType.USENET
+        )
         self.fetch.assert_not_called()
+
+    def test_no_usenet_client_does_not_warn_about_client_id(self):
+        # has_enabled_client must be used instead of get_least_used_client,
+        # so ExternalClientNotFound (and its "client with given ID not
+        # found: -1" warning) is never constructed for this check.
+        self.external.has_enabled_client.return_value = False
+        self.external.get_least_used_client.assert_not_called()
+        with patch("backend.base.custom_exceptions.LOGGER") as ce_logger:
+            with self.assertRaises(EnqueuingDownloadFailure):
+                self.prepper().get_downloads()
+
+        for call in ce_logger.warning.call_args_list:
+            message = " ".join(map(str, call.args))
+            self.assertNotIn("External client with given ID not found", message)
+        self.external.get_least_used_client.assert_not_called()
 
     def test_broken_nzb_is_blocklisted(self):
         self.fetch.side_effect = DownloadLinkBroken(LINK)

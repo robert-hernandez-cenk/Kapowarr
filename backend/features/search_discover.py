@@ -25,15 +25,25 @@ async def _get_all_new_releases() -> List[SearchResultData]:
     Returns:
         List[SearchResultData]: The list of downloads.
     """
-    usenet_available = usenet_client_available()
-    indexers = [
+    enabled_indexers = [
         indexer
         for indexer in IndexerClients.get_all_clients()
         if indexer.get_indexer_data()["enabled"]
-        and (
-            usenet_available
-            or indexer.download_type != DownloadType.USENET
+    ]
+    # Only touch the database for the availability check when it's actually
+    # needed, so torrent/DDL-only setups never hit it.
+    usenet_available = (
+        usenet_client_available()
+        if any(
+            indexer.download_type == DownloadType.USENET
+            for indexer in enabled_indexers
         )
+        else False
+    )
+    indexers = [
+        indexer
+        for indexer in enabled_indexers
+        if usenet_available or indexer.download_type != DownloadType.USENET
     ]
 
     last_rss_sync = (

@@ -3,7 +3,6 @@
 from asyncio import gather, run
 from typing import Dict, List, Set, Tuple, TypedDict, TypeVar, Union
 
-from backend.base.custom_exceptions import ExternalClientNotFound
 from backend.base.definitions import (DownloadType, IndexerClient, IssueData,
                                       MatchedSearchResultData, QueryBuilder,
                                       QueryKeys, QueryResult, SearchAction,
@@ -37,20 +36,19 @@ PROTOCOL_PREFERENCE: Tuple[DownloadType, ...] = (
 
 def usenet_client_available() -> bool:
     """Check whether there is an enabled Usenet download client. Without one,
-    results from Usenet indexers can't be downloaded.
+    results from Usenet indexers can't be downloaded. Only call this when
+    there's at least one enabled Usenet indexer, as it always queries the
+    database.
 
     Returns:
         bool: Whether there is an enabled Usenet client.
     """
-    try:
-        ExternalClients.get_least_used_client(DownloadType.USENET)
-        return True
-
-    except ExternalClientNotFound:
+    available = ExternalClients.has_enabled_client(DownloadType.USENET)
+    if not available:
         LOGGER.debug(
             "No enabled Usenet download client, skipping Usenet indexers"
         )
-        return False
+    return available
 
 
 def protocol_rank(download_type: Union[DownloadType, int, None]) -> int:
@@ -102,11 +100,22 @@ class SearchCoordinator:
         self.is_issue_search = len(self.wanted_issues) == 1
 
         self.indexers: List[IndexerTeam] = []
-        usenet_available = usenet_client_available()
-        for client in IndexerClients.get_all_clients():
-            if not client.get_indexer_data()["enabled"]:
-                continue
-
+        enabled_clients = [
+            client
+            for client in IndexerClients.get_all_clients()
+            if client.get_indexer_data()["enabled"]
+        ]
+        # Only touch the database for the availability check when it's
+        # actually needed, so torrent/DDL-only setups never hit it.
+        usenet_available = (
+            usenet_client_available()
+            if any(
+                client.download_type == DownloadType.USENET
+                for client in enabled_clients
+            )
+            else False
+        )
+        for client in enabled_clients:
             if (
                 client.download_type == DownloadType.USENET
                 and not usenet_available
