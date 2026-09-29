@@ -732,6 +732,8 @@ class MatchedSearchResultData(
     total=False
 ):
     _issue_number: Union[float, Tuple[float, float]]
+    download_type: int
+    "The `DownloadType` value of the indexer that the result came from"
 
 
 class IssueMetadata(TypedDict):
