@@ -140,11 +140,11 @@ Registered as `(DownloadType.USENET, "SABnzbd", (TITLE, ENABLED, BASE_URL, API_T
   - This matters because on a Kapowarr restart `__load_downloads` rebuilds each download and calls `run()` again. qBittorrent de-duplicates by hash, but SABnzbd would add a duplicate job.
 - Otherwise it takes the NZB from the cache (or fetches it again), uploads it with `mode=addfile` (`cat=kapowarr`, `nzbname={name}`), and returns `nzo_ids[0]`.
 - Raises `ClientNotWorking` if `status` is false or no `nzo_id` is returned.
-- `target_folder` is ignored. SABnzbd's `kapowarr` category controls where files land, and the user sets up that category in SABnzbd. A missing category makes SABnzbd fall back to its default, which is acceptable.
+- `target_folder` is ignored. SABnzbd's `kapowarr` category controls where files land, and the user sets up that category in SABnzbd. The client Test fails when the `kapowarr` category is missing, and the history is read unfiltered so a job is never lost to a category mismatch.
 
 **Status polling**
 
-- Batched refresh of `mode=queue` and `mode=history&category=kapowarr`, at most once every 30 s, cached per client instance. This follows the qBittorrent pattern.
+- Batched refresh of `mode=queue` and `mode=history&limit=200` (no category filter), at most once every 30 s, cached per client instance. This follows the qBittorrent pattern.
 - `get_download(nzo_id)` returns `None` only when the ID is missing from both lists on two consecutive checks. This guards against the moment a job moves from the queue to the history. After a single miss it reports QUEUED.
 
 **State mapping**

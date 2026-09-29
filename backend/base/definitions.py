@@ -485,6 +485,7 @@ class BrokenClientReason(BaseEnum):
     Access denied not because credentials are invalid but because,
     e.g., Mega failed to log in anonymously or a webpage is blocked by CF
     """
+    MISSING_CATEGORY = "missing_category"
 
 
 class EnqueuingDownloadFailureReason(BaseEnum):

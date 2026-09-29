@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from backend.base.custom_exceptions import ClientNotWorking, CredentialInvalid
-from backend.base.definitions import DownloadState
+from backend.base.definitions import BrokenClientReason, DownloadState
 from backend.implementations.external_clients.usenet.SABnzbd import (
     SABnzbd, parse_sab_jobs)
 from backend.implementations.usenet import NzbFile
@@ -94,6 +94,17 @@ class sabnzbd_client(unittest.TestCase):
             status = client.get_download("nzo_c")
         self.assertEqual(status["state"], DownloadState.IMPORTING_STATE)
 
+    def test_history_is_read_without_category(self):
+        client = make_client()
+        api = MagicMock(side_effect=[QUEUE_JSON, HISTORY_JSON])
+        with patch.object(SABnzbd, "_api", api):
+            client.get_download("nzo_c")
+
+        history_params = api.call_args_list[1].args[3]
+        self.assertEqual(history_params["mode"], "history")
+        self.assertNotIn("category", history_params)
+        self.assertEqual(history_params["limit"], 200)
+
     def test_missing_job_needs_two_checks(self):
         client = make_client()
         with patch.object(
@@ -180,7 +191,20 @@ class sabnzbd_test(unittest.TestCase):
             SABnzbd.test("http://sab:8080", None, None, "TOKEN")
 
     def test_valid(self):
-        self.run_test_with({"version": "4.3.2"}, EMPTY_QUEUE)
+        self.run_test_with(
+            {"version": "4.3.2"}, EMPTY_QUEUE,
+            {"categories": ["*", "kapowarr"]}
+        )
+
+    def test_missing_category(self):
+        with self.assertRaises(ClientNotWorking) as cm:
+            self.run_test_with(
+                {"version": "4.3.2"}, EMPTY_QUEUE,
+                {"categories": ["*", "tv"]}
+            )
+        self.assertEqual(
+            cm.exception.reason, BrokenClientReason.MISSING_CATEGORY
+        )
 
     def test_bad_key(self):
         with self.assertRaises(CredentialInvalid):

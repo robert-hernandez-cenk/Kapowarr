@@ -4,7 +4,8 @@ const brokenClientReasonMap = {
     version_not_supported: "The version is not supported",
     failed_processing_response: "Got an unexpected response back",
     access_denied: "Access denied by client but not because of invalid credentials",
-	invalid_credentials: "Failed to login with the given credentials"
+	invalid_credentials: "Failed to login with the given credentials",
+	missing_category: "The download client has no 'kapowarr' category; create it in the client first"
 }
 
 function createUsernameInput(id) {

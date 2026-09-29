@@ -179,18 +179,17 @@ class SABnzbd(BaseExternalClient):
         return result
 
     def _refresh(self) -> None:
-        "Fetch the queue and the Kapowarr history from SABnzbd"
+        """Fetch the queue and the history from SABnzbd. The history is read
+        without a category filter, so that a job whose category SABnzbd
+        rewrote is never lost.
+        """
         queue = self._api(
             self.ssn, self.base_url, self.api_token,
             {"mode": "queue"}
         )
         history = self._api(
             self.ssn, self.base_url, self.api_token,
-            {
-                "mode": "history",
-                "category": Constants.EXTERNAL_DOWNLOAD_TAG,
-                "limit": 100
-            }
+            {"mode": "history", "limit": 200}
         )
         self.jobs = parse_sab_jobs(queue, history)
         self.last_update = time()
@@ -315,5 +314,11 @@ class SABnzbd(BaseExternalClient):
 
             # Version doesn't need the API key, the queue does
             cls._api(ssn, base_url, api_token, {"mode": "queue", "limit": 1})
+
+            categories = cls._api(
+                ssn, base_url, api_token, {"mode": "get_cats"}
+            ).get("categories") or []
+            if Constants.EXTERNAL_DOWNLOAD_TAG not in categories:
+                raise ClientNotWorking(BrokenClientReason.MISSING_CATEGORY)
 
         return
