@@ -26,7 +26,8 @@ from backend.base.helpers import CommaList, Singleton
 from backend.base.logging import LOGGER
 from backend.features.post_processing import (PostProcessor,
                                               PostProcessorTorrentsComplete,
-                                              PostProcessorTorrentsCopy)
+                                              PostProcessorTorrentsCopy,
+                                              PostProcessorUsenet)
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.download_client_manager import DownloadClients
 from backend.implementations.download_prepper_manager import DownloadPreppers
@@ -40,6 +41,32 @@ from backend.internals.settings import Settings
 
 if TYPE_CHECKING:
     from threading import Thread
+
+
+def get_external_post_processor(
+    download: ExternalDownload,
+    seeding_handling: SeedingHandling
+) -> PostProcessor:
+    """Choose the post-processor for an external download.
+
+    Args:
+        download (ExternalDownload): The external download.
+        seeding_handling (SeedingHandling): The seeding handling setting.
+
+    Returns:
+        PostProcessor: The post-processor for the download.
+    """
+    if download.identifier == DownloadClientIdentifier.USENET:
+        return PostProcessorUsenet(download)
+
+    if seeding_handling == SeedingHandling.COMPLETE:
+        return PostProcessorTorrentsComplete(download)
+
+    elif seeding_handling == SeedingHandling.COPY:
+        return PostProcessorTorrentsCopy(download)
+
+    else:
+        assert_never(seeding_handling)
 
 
 class DownloadHandler(metaclass=Singleton):
@@ -419,14 +446,7 @@ class DownloadHandler(metaclass=Singleton):
         status_event = QueueStatusEvent(download)
         seeding_handling = self.settings.sv.seeding_handling
 
-        if seeding_handling == SeedingHandling.COMPLETE:
-            pp = PostProcessorTorrentsComplete(download)
-
-        elif seeding_handling == SeedingHandling.COPY:
-            pp = PostProcessorTorrentsCopy(download)
-
-        else:
-            assert_never(seeding_handling)
+        pp = get_external_post_processor(download, seeding_handling)
 
         # When seeding_handling is 'copy', keep track of whether we already
         # copied the files
@@ -460,7 +480,12 @@ class DownloadHandler(metaclass=Singleton):
                 pp.seeding()
 
             elif download.state == DownloadState.IMPORTING_STATE:
-                if self.settings.sv.delete_completed_downloads:
+                if (
+                    self.settings.sv.delete_completed_downloads
+                    # Usenet downloads are moved out of the client's folder,
+                    # so there is nothing left for the client's history
+                    or download.identifier == DownloadClientIdentifier.USENET
+                ):
                     download.remove_from_client(delete_files=False)
                 pp.success()
                 self.queue.remove(download)
