@@ -51,7 +51,8 @@ const enqueueFailureReasonMap = {
     only_rate_limited_links: "All working download links on the webpage are from rate limited services",
 
     link_broken: "Download link broken",
-    link_rate_limited: "Download link rate limited"
+    link_rate_limited: "Download link rate limited",
+    no_usenet_client: "No enabled Usenet download client"
 }
 
 //
@@ -361,11 +362,18 @@ function showManualSearch(api_key, issue_id=null) {
 				);
 
 			const title = entry.querySelector('a');
-			title.href = result.link;
 			title.innerText = result.display_title;
+			if (result.download_type === 3)
+				// NZB links contain the API key of the indexer
+				title.removeAttribute('href');
+			else
+				title.href = result.link;
 
-			entry.querySelector('.source-column').innerText = result.indexer_title;
-			
+			entry.querySelector('.source-column').innerText =
+				result.download_type === 3
+					? `${result.indexer_title} (Usenet)`
+					: result.indexer_title;
+
 			entry.querySelector('.size-column').innerText = convertSize(result.size, 1);
 
 			const download_button = entry.querySelector('.search-action-column :nth-child(1)');
