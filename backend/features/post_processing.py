@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from os.path import basename, exists, isfile, join, splitext
+from os import listdir, rmdir
+from os.path import basename, dirname, exists, isdir, isfile, join, splitext
 from time import time
 from typing import TYPE_CHECKING, Dict
 
@@ -130,18 +131,20 @@ class PostProcessingContext:
 
     def move_torrent_to_dest(self) -> None:
         """
-        Move folder downloaded using torrent from download folder to
-        final destination, extract files, scan them, rename them.
+        Move file or folder downloaded using torrent from download folder to
+        final destination, extract files (if it is a folder), scan them,
+        rename them.
         """
         if not exists(self.download.files[0]):
             return
 
         self.move_to_dest()
 
-        self.download.files = extract_files_from_folder(
-            self.download.files[0],
-            self.download.volume_id
-        )
+        if isdir(self.download.files[0]):
+            self.download.files = extract_files_from_folder(
+                self.download.files[0],
+                self.download.volume_id
+            )
 
         if not self.download.files:
             return
@@ -345,8 +348,39 @@ class PostProcessorTorrentsCopy(PostProcessor):
         return
 
 
+def delete_empty_job_folder(completed_file: str, job_name: str) -> None:
+    """After a single-file download was moved out of the download client's
+    folder, delete the job folder it was in, if that folder is now empty.
+    Only a folder named after the job is deleted, so that the client's
+    category folder is never removed.
+
+    Args:
+        completed_file (str): Where the file was before it was moved.
+        job_name (str): The name of the job in the download client.
+    """
+    job_folder = dirname(completed_file)
+    if (
+        basename(job_folder) == job_name
+        and isdir(job_folder)
+        and not listdir(job_folder)
+    ):
+        LOGGER.debug(f'Deleting empty job folder: {job_folder}')
+        rmdir(job_folder)
+    return
+
+
 class PostProcessorUsenet(PostProcessorTorrentsComplete):
     """
     Usenet downloads never seed, so they're always moved, extracted, scanned
     and renamed as soon as the download client reports them complete.
     """
+
+    def success(self) -> None:
+        completed_path = self.download.files[0]
+        is_single_file = isfile(completed_path)
+
+        super().success()
+
+        if is_single_file:
+            delete_empty_job_folder(completed_path, self.download.title)
+        return
