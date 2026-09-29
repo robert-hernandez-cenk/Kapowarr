@@ -41,7 +41,9 @@ These columns are also added to:
   - `CATEGORIES` is parsed into a `CommaList` of numeric strings. An empty value is rejected.
   - `API_KEY` must be a non-empty string.
 
-`get_indexer_data()` returns `api_key` masked as `Constants.CREDENTIAL_REPLACEMENT`. On update, receiving the masked value keeps the stored key, the same way external client passwords work.
+`get_indexer_data()` returns `api_key` unmasked. This matches how external clients already return `password` and `api_token`, and the edit form's Test button has to send the real key to `/indexers/test`, which doesn't know the indexer ID. The whole API is behind Kapowarr's API-key auth.
+
+`update_indexer` fills every `IndexerClientField` column with `None` before applying the validated data. Otherwise the UPDATE fails with a missing named parameter for the columns a client type doesn't use.
 
 ### Newznab indexer (`backend/implementations/indexer_clients/usenet/Newznab.py`)
 
@@ -49,7 +51,7 @@ Registered as `(DownloadType.USENET, "Newznab", (TITLE, ENABLED, URL, API_KEY, C
 
 **`search(query)`**
 
-- Request: `GET {url}/api?t=search&q={query}&cat={categories}&apikey={key}&offset={page*100}&limit=100`
+- Request: `GET {url}/api?t=search&q={query}&cat={categories}&apikey={key}&offset={(page-1)*100}&limit=100`. Query builder pages start at 1.
 - The response is parsed as RSS/XML, which every Newznab implementation supports. Each `<item>` becomes a `SearchResultData`:
   - `title` goes through `extract_filename_data(title, assume_volume_number=False, fix_year=True)`, as GetComics does
   - `link` comes from `<enclosure url>`, falling back to `<link>`
@@ -66,19 +68,20 @@ Registered as `(DownloadType.USENET, "Newznab", (TITLE, ENABLED, URL, API_KEY, C
 
 **`test(url, api_key, categories)`**
 
-- Calls `GET {url}/api?t=caps&apikey={key}`.
+- Calls `GET {url}/api?t=search&cat={categories}&limit=1&apikey={key}`. `t=caps` isn't used because many indexers answer it without checking the key.
 - A Newznab `<error code>` of 100, 101 or 102 raises `CredentialInvalid`.
 - A connection error, a non-XML response, or any other error code raises `ClientNotWorking`.
 
 **Error handling during search**
 
-- Error code 500 (request limit reached) and connection errors are logged as warnings.
+- Error codes 429, 500 and 501 (request or download limit reached) and connection errors are logged as warnings.
 - The failing indexer returns an empty `QueryResult(next_page_available=False)` for that query, so its planner stops without failing the whole search.
+- After a limit error, the indexer makes no further requests for the rest of that search.
 
 **Categories and URL**
 
 - Default categories are `7030` (Comics). The UI hint suggests adding `7000` (Books) for indexers that file comics there.
-- The URL is stored without the trailing `/api`. If the user enters it with `/api`, it is stripped.
+- The URL is accepted with or without a trailing `/api`. The API URL is derived from it at request time.
 
 ### Query builder (`backend/implementations/query_builders/Usenet.py`)
 
@@ -89,18 +92,30 @@ Registered as `(DownloadType.USENET, "Newznab", (TITLE, ENABLED, URL, API_KEY, C
 
 ### Ranking (`backend/features/search_full.py`)
 
-- The `SearchCoordinator` builds an `indexer_id → DownloadType` map from its indexer teams.
-- `_rank_search_result` appends a final sort-key element: the protocol rank, where `USENET` beats `DDL`. It is the last element, so it only breaks ties after all match-quality elements.
-- `choose_downloads` uses the same ranking. It is shared by auto search and RSS sync (`search_discover.py`), and RSS sync builds the same map from the enabled indexers.
+- `MatchedSearchResultData` gains an optional `download_type: int`, which the coordinator sets from the result's indexer. Manual search results therefore carry it to the frontend.
+- The sort key becomes `(rank_list, protocol_rank(download_type))`, where `protocol_rank` orders USENET, then DDL, then TORRENT. Because it is a separate tuple element after the whole rank list, it only breaks exact ties.
+- Auto search already takes the coordinator's sorted order into `choose_downloads`.
+- RSS sync doesn't rank at all today. Its matched releases are stably sorted by `protocol_rank` of their indexer's type before `choose_downloads`, which is greedy in list order.
 
 **Bug fix:** in `_run_iteration`, stopped indexers are currently removed with `del actions[idx]` / `del self.indexers[idx]` inside a loop over the original indices. Replace this with a rebuild that keeps only the non-stopped pairs.
 
 ### Prepper (`backend/implementations/download_preppers/usenet/Newznab.py`)
 
 - Registered as `(DownloadType.USENET, "Newznab")`.
-- `get_downloads()` returns `[UsenetDownload(...)]` for the NZB link.
-- The covered issues come from `extract_filename_data` on the release title (the web title), mapped to the volume's issues the same way GetComics link paths are.
-- If the title doesn't match the volume/issue and `force_match` is false, it raises `EnqueuingDownloadFailure`.
+- The prepper only receives the NZB link and indexer ID, not the release title. It therefore fetches the NZB itself through `backend/implementations/usenet.py`:
+  - `fetch_nzb(link)` downloads the file and validates that it is an NZB.
+  - The release name comes from the `X-DNZB-Name` header, then the `Content-Disposition` filename, then the NZB's `<meta type="name">`.
+  - The result is cached in memory by link.
+  - SABnzbd receives the cached file through `mode=addfile`. This avoids a second grab against the indexer's API limit.
+- Steps in `get_downloads()`:
+  1. No enabled Usenet client → `EnqueuingDownloadFailure(NO_USENET_CLIENT)`. This is a new reason, and `view_volume.js` gets text for it.
+  2. The NZB is broken → blocklist the link (`LINK_BROKEN`) and raise `EnqueuingDownloadFailure(LINK_BROKEN)`.
+  3. The release name doesn't pass `download_group_filter` and `force_match` is false → `EnqueuingDownloadFailure(NO_MATCHES)`.
+  4. Otherwise return `[UsenetDownload(...)]`:
+     - `covered_issues` comes from `extract_filename_data` plus `refine_special_version`
+     - `web_title` is the release name
+     - `web_link` is `None`, so no API-key-bearing URL lands in history links
+     - `source_name` is the indexer title
 
 ### Download class (`backend/implementations/download_clients/Usenet.py`)
 
@@ -108,12 +123,12 @@ Registered as `(DownloadType.USENET, "Newznab", (TITLE, ENABLED, URL, API_KEY, C
 
 - `__init__`:
   - Uses the passed `external_client` when restoring from the DB. Otherwise it calls `ExternalClients.get_least_used_client(DownloadType.USENET)`.
-  - Catches `ExternalClientNotFound` and raises `EnqueuingDownloadFailure("No enabled Usenet download client")`.
-  - Takes the title from the release title, sanitised for use as a filename.
+  - Catches `ExternalClientNotFound` and raises `EnqueuingDownloadFailure(NO_USENET_CLIENT)`.
+  - The title and filename body follow `TorrentDownload`: the generated issue name when renaming is on, otherwise the release name. The title is also the SABnzbd job name.
   - Uses `download_service = DownloadService.USENET` and `source_name` = the indexer title.
-  - Leaves `files` empty until the job completes.
-- `run()`: `external_id = external_client.add_download(download_link, <unused target>, title)`.
-- `update_status()` copies progress, speed, size and state from `get_download()`. `None` means CANCELED. On IMPORTING it also captures `storage`.
+  - `files` starts as a placeholder `[download_folder/<release name>]`, because `as_dict()` reads `files[0]`. It is replaced with the real path on completion.
+- `run()`: `external_id = external_client.add_download(download_link, <unused target>, title)`. If the NZB can no longer be fetched (`DownloadLinkBroken`), the state becomes FAILED, and the queue then blocklists the link.
+- `update_status()` copies progress, speed, size and state from `get_download()`. `None` means CANCELED. On IMPORTING it resolves `storage` (see Section 3).
 
 ### SABnzbd client (`backend/implementations/external_clients/usenet/SABnzbd.py`)
 
@@ -121,14 +136,16 @@ Registered as `(DownloadType.USENET, "SABnzbd", (TITLE, ENABLED, BASE_URL, API_T
 
 **`add_download(link, target_folder, name)`**
 
-- Calls `mode=addurl&name={link}&cat=kapowarr&nzbname={name}` and returns `nzo_ids[0]`.
-- Raises `ExternalClientNotWorking` if `status` is false.
+- **Idempotent.** It first refreshes the queue and history. If a `kapowarr`-category job with the same name exists, it returns that job's `nzo_id`.
+  - This matters because on a Kapowarr restart `__load_downloads` rebuilds each download and calls `run()` again. qBittorrent de-duplicates by hash, but SABnzbd would add a duplicate job.
+- Otherwise it takes the NZB from the cache (or fetches it again), uploads it with `mode=addfile` (`cat=kapowarr`, `nzbname={name}`), and returns `nzo_ids[0]`.
+- Raises `ClientNotWorking` if `status` is false or no `nzo_id` is returned.
 - `target_folder` is ignored. SABnzbd's `kapowarr` category controls where files land, and the user sets up that category in SABnzbd. A missing category makes SABnzbd fall back to its default, which is acceptable.
 
 **Status polling**
 
 - Batched refresh of `mode=queue` and `mode=history&category=kapowarr`, at most once every 30 s, cached per client instance. This follows the qBittorrent pattern.
-- `get_download(nzo_id)` returns `None` when the ID is in neither list.
+- `get_download(nzo_id)` returns `None` only when the ID is missing from both lists on two consecutive checks. This guards against the moment a job moves from the queue to the history. After a single miss it reports QUEUED.
 
 **State mapping**
 
@@ -163,18 +180,21 @@ Registered as `(DownloadType.USENET, "SABnzbd", (TITLE, ENABLED, BASE_URL, API_T
 ### Finding the files (`backend/implementations/remote_mapping.py`)
 
 - On IMPORTING, `UsenetDownload` sets `files = [RemoteMappings.remote_to_local(client.id, storage)]`.
-- If that path doesn't exist locally, the download goes to FAILED. The log line names the SABnzbd path, the translated local path, and the Remote Mapping setting. It does not import nothing silently, and it does not blocklist, because this is a configuration error rather than a bad release.
-- `remote_to_local` has never been called before, so its behaviour gets verified and tested: longest-prefix match, and passthrough when no mapping applies.
+- If that path doesn't exist locally, the download stays in DOWNLOADING at 100% and logs an error once. The error names the SABnzbd path, the translated local path, and the Remote Path Mappings setting. The next poll retries, so fixing the mapping un-sticks it.
+  - Going to FAILED would blocklist a good release.
+  - Going to CANCELED would delete SABnzbd's files.
+- `remote_to_local` has never been called before, so it gets tested: mapping applied, and passthrough when no mapping applies. Mappings for one client can't nest, because the add/edit validation rejects that, so longest-prefix ordering isn't needed.
 
 ### PostProcessorUsenet (`backend/features/post_processing.py`)
 
-Based on `PostProcessorTorrentsComplete`, using the existing helpers rather than copies of them. `success` runs these steps:
+This is a subclass of `PostProcessorTorrentsComplete` with identical steps: move the folder to the volume folder, `extract_files_from_folder` (which handles any `.rar`/`.zip` left over if SABnzbd unpacking was off), `scan_files`, `mass_rename`, convert, and set file properties. It exists so the choice is explicit and can diverge later.
 
-1. Move the files from the storage path to the volume folder (`move_torrent_to_dest` logic, generalised or reused).
-2. Run `extract_files_from_folder`, which handles any `.rar`/`.zip` left over if SABnzbd unpacking was off.
-3. Run `scan_files` and `mass_rename`.
-4. Remove the job from SABnzbd's history with `del_files=0`, since the files have already been moved.
-5. Remove it from the queue and add a history entry, as for torrents.
+The choice is made by a module-level `get_external_post_processor(download, seeding_handling)` in `download_queue.py`:
+
+- Usenet → `PostProcessorUsenet`
+- otherwise → the seeding-handling choice
+
+On IMPORTING, the queue loop always calls `remove_from_client(delete_files=False)` for Usenet downloads, regardless of `delete_completed_downloads`. That removes the SABnzbd history entry before the files are moved.
 
 `canceled` and `perm_failed` behave as they do for torrents.
 
@@ -193,7 +213,7 @@ Queue, history and blocklist show `source_type = "Usenet"` and `source_name` = t
 
 - Add a "Usenet" section (`#usenet-indexer-list`) under DDL. `typeToList = {1: ddl, 3: usenet}`. Indexers of unknown types are skipped rather than throwing.
 - The add/edit forms render inputs from `required_tokens`:
-  - `api_key`: a password input, sent as the masked value when unchanged
+  - `api_key`: a password input
   - `categories`: a text input prefilled with `7030`, with a hint about `7000`
 - Save/test payloads include only the fields the indexer declares, instead of always sending `gc_*`.
 - The Usenet section's add button offers the client types from `/indexers/options[3]`, which is Newznab.
@@ -213,7 +233,8 @@ Queue, history and blocklist show `source_type = "Usenet"` and `source_name` = t
 
 ### Download settings (`frontend/templates/settings_download.html`)
 
-The Seeding Handling help text gains "Only applies to torrents."
+- The Seeding Handling help text gains "Usenet downloads are always imported as soon as they complete."
+- The Delete Completed Downloads help text gains "Usenet downloads are always removed from SABnzbd's history."
 
 ## 5. Testing
 
@@ -225,7 +246,8 @@ The tests use unittest under `tests/Tbackend/`, with HTTP mocked and no live net
   - error 100 → `CredentialInvalid`
   - error 500 → empty result
   - `discover` stops at `last_check`
-  - `/api` suffix stripping
+  - API URL built with or without a trailing `/api`
+- `implementations/usenet.py`: NZB name extraction (header, Content-Disposition, meta), NZB validation, and the fetch cache
 - `implementations/sabnzbd.py`:
   - state mapping from recorded queue/history JSON
   - `storage` extraction
