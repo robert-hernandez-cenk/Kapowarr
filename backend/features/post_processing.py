@@ -343,3 +343,10 @@ class PostProcessorTorrentsCopy(PostProcessor):
         self.ctx.set_file_properties()
         self.download.files = self.ctx.original_files
         return
+
+
+class PostProcessorUsenet(PostProcessorTorrentsComplete):
+    """
+    Usenet downloads never seed, so they're always moved, extracted, scanned
+    and renamed as soon as the download client reports them complete.
+    """

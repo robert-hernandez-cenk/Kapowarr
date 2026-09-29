@@ -100,6 +100,63 @@ function createGCServicePreferenceInput(inputId) {
 	return row;
 }
 
+function createTextInputRow(inputId, labelText, inputType, descriptionText) {
+	const row = document.createElement('tr');
+	const header = document.createElement('th');
+	const label = document.createElement('label');
+	label.innerText = labelText;
+	label.setAttribute('for', inputId);
+	header.appendChild(label);
+	row.appendChild(header);
+	const container = document.createElement('td');
+	const input = document.createElement('input');
+	input.type = inputType;
+	input.id = inputId;
+	input.required = true;
+	container.appendChild(input);
+	const description = document.createElement('p');
+	description.innerText = descriptionText;
+	container.appendChild(description);
+	row.appendChild(container);
+	return row;
+}
+
+function createApiKeyInput(inputId) {
+	return createTextInputRow(
+		inputId, 'API Key', 'password',
+		'The API key of your account at the indexer.'
+	);
+}
+
+function createCategoriesInput(inputId) {
+	return createTextInputRow(
+		inputId, 'Categories', 'text',
+		'Comma separated Newznab category IDs to search in. 7030 is Comics. Add 7000 (Books) if your indexer files comics there.'
+	);
+}
+
+function getIndexerExtraFields(form, prefix) {
+	const data = {};
+
+	const prefTable = form.querySelectorAll('#pref-table select');
+	if (prefTable.length)
+		data.gc_service_preference = [...prefTable].map(e => e.value);
+
+	const gcAvoid = form.querySelector(`#${prefix}-gc-avoid-input`);
+	if (gcAvoid)
+		data.gc_avoid_large_downloads = gcAvoid.checked;
+
+	const apiKey = form.querySelector(`#${prefix}-api-key-input`);
+	if (apiKey)
+		data.api_key = apiKey.value;
+
+	const categories = form.querySelector(`#${prefix}-categories-input`);
+	if (categories)
+		data.categories = categories.value;
+
+	return data;
+}
+
 function loadEditIndexer(apiKey, indexerId) {
 	const form = document.querySelector('#edit-indexer-form tbody');
 	form.dataset.id = indexerId;
@@ -142,6 +199,20 @@ function loadEditIndexer(apiKey, indexerId) {
 			form.appendChild(gcServicePreferenceInput);
 		};
 
+		if (clientOptions.includes('api_key')) {
+			const apiKeyInput = createApiKeyInput('edit-api-key-input');
+			apiKeyInput.querySelector('input').value =
+				clientData.result.api_key || '';
+			form.appendChild(apiKeyInput);
+		};
+
+		if (clientOptions.includes('categories')) {
+			const categoriesInput = createCategoriesInput('edit-categories-input');
+			categoriesInput.querySelector('input').value =
+				(clientData.result.categories || []).join(',');
+			form.appendChild(categoriesInput);
+		};
+
 		showWindow('edit-indexer-window');
 	});
 };
@@ -156,17 +227,11 @@ function saveEditIndexer() {
 			const form = document.querySelector('#edit-indexer-form tbody');
 			const indexerId = form.dataset.id;
 
-			const prefTable = document.querySelectorAll("#pref-table select")
-			let gcServicePreference = null
-			if (prefTable)
-				gcServicePreference = [...prefTable].map(e => e.value)
-
 			const data = {
 				title: form.querySelector('#edit-title-input').value,
 				enabled: form.querySelector('#edit-enabled-input').checked,
 				url: form.querySelector('#edit-url-input').value,
-				gc_service_preference: gcServicePreference,
-				gc_avoid_large_downloads: form.querySelector('#edit-gc-avoid-input')?.checked ?? null,
+				...getIndexerExtraFields(form, 'edit')
 			};
 			sendAPI('PUT', `/indexers/${indexerId}`, apiKey, {}, data)
 			.then(response => {
@@ -184,17 +249,11 @@ async function testEditIndexer(apiKey) {
 	const testButton = document.querySelector('#test-indexer-edit');
 	testButton.classList.remove('show-success', 'show-fail');
 
-	const prefTable = document.querySelectorAll("#pref-table select")
-	let gcServicePreference = null
-	if (prefTable)
-		gcServicePreference = [...prefTable].map(e => e.value)
-
 	const data = {
 		download_type: parseInt(form.dataset.download_type),
 		client_type: form.dataset.type,
 		url: form.querySelector('#edit-url-input').value,
-		gc_service_preference: gcServicePreference,
-		gc_avoid_large_downloads: form.querySelector('#edit-gc-avoid-input')?.checked ?? null,
+		...getIndexerExtraFields(form, 'edit')
 	};
 
 	return await sendAPI('POST', '/indexers/test', apiKey, {}, data)
@@ -265,6 +324,15 @@ function loadAddIndexer(apiKey, downloadType, clientType) {
 		if (clientOptions.required_tokens.includes('gc_service_preference'))
 			form.appendChild(createGCServicePreferenceInput('add-gc-service-preference-input'));
 
+		if (clientOptions.required_tokens.includes('api_key'))
+			form.appendChild(createApiKeyInput('add-api-key-input'));
+
+		if (clientOptions.required_tokens.includes('categories')) {
+			const categoriesInput = createCategoriesInput('add-categories-input');
+			categoriesInput.querySelector('input').value = '7030';
+			form.appendChild(categoriesInput);
+		};
+
 		showWindow('add-indexer-window');
 	});
 };
@@ -280,11 +348,6 @@ function saveAddIndexer() {
 				return;
 
 			const form = document.querySelector('#add-indexer-form tbody');
-			
-			const prefTable = document.querySelectorAll("#pref-table select")
-			let gcServicePreference = null
-			if (prefTable)
-				gcServicePreference = [...prefTable].map(e => e.value)
 
 			const data = {
 				download_type: parseInt(form.dataset.download_type),
@@ -292,8 +355,7 @@ function saveAddIndexer() {
 				title: form.querySelector('#add-title-input').value,
 				enabled: form.querySelector('#add-enabled-input').checked,
 				url: form.querySelector('#add-url-input').value,
-				gc_service_preference: gcServicePreference,
-				gc_avoid_large_downloads: form.querySelector('#add-gc-avoid-input')?.checked ?? null,
+				...getIndexerExtraFields(form, 'add')
 			};
 			sendAPI('POST', '/indexers', apiKey, {}, data)
 			.then(response => {
@@ -320,17 +382,11 @@ async function testAddIndexer(apiKey) {
 	const testButton = document.querySelector('#test-indexer-add');
 	testButton.classList.remove('show-success', 'show-fail');
 
-	const prefTable = document.querySelectorAll("#pref-table select")
-	let gcServicePreference = null
-	if (prefTable)
-		gcServicePreference = [...prefTable].map(e => e.value)
-
 	const data = {
 		download_type: parseInt(form.dataset.download_type),
 		client_type: form.dataset.type,
 		url: form.querySelector('#add-url-input').value,
-		gc_service_preference: gcServicePreference,
-		gc_avoid_large_downloads: form.querySelector('#add-gc-avoid-input')?.checked ?? null,
+		...getIndexerExtraFields(form, 'add')
 	};
 
 	return await sendAPI('POST', '/indexers/test', apiKey, {}, data)
@@ -339,17 +395,19 @@ async function testAddIndexer(apiKey) {
 		if (json.result.success)
 			// Test successful
 			testButton.classList.add('show-success');
-		else
+		else {
 			// Test failed
 			testButton.classList.add('show-fail');
 			error.innerText = brokenClientReasonMap[json.result.description];
 			hide([], [error]);
+		};
 		return json.result.success;
 	});
 };
 
 const typeToList = {
-	1: document.querySelector("#ddl-indexer-list")
+	1: document.querySelector("#ddl-indexer-list"),
+	3: document.querySelector("#usenet-indexer-list")
 };
 
 function loadIndexers(apiKey) {
@@ -360,10 +418,13 @@ function loadIndexers(apiKey) {
 	fetchAPI('/indexers', apiKey)
 	.then(json => {
 		json.result.forEach(indexer => {
+			const list = typeToList[indexer.download_type];
+			if (!list)
+				return;
 			const entry = document.createElement('button');
 			entry.onclick = e => loadEditIndexer(apiKey, indexer.id);
 			entry.innerText = indexer.title;
-			typeToList[indexer.download_type].appendChild(entry);
+			list.appendChild(entry);
 		});
 	});
 };

@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 from time import time
 from typing import Dict, List
 
-from backend.base.definitions import SearchResultData
+from backend.base.definitions import DownloadType, SearchResultData
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import extract_year_from_date
 from backend.base.logging import LOGGER
-from backend.features.search_full import choose_downloads
+from backend.features.search_full import (choose_downloads, protocol_rank,
+                                          usenet_client_available)
 from backend.implementations.indexer_client_manager import IndexerClients
 from backend.implementations.matching import (check_search_result_match,
                                               match_title)
@@ -24,10 +25,25 @@ async def _get_all_new_releases() -> List[SearchResultData]:
     Returns:
         List[SearchResultData]: The list of downloads.
     """
-    indexers = [
+    enabled_indexers = [
         indexer
         for indexer in IndexerClients.get_all_clients()
         if indexer.get_indexer_data()["enabled"]
+    ]
+    # Only touch the database for the availability check when it's actually
+    # needed, so torrent/DDL-only setups never hit it.
+    usenet_available = (
+        usenet_client_available()
+        if any(
+            indexer.download_type == DownloadType.USENET
+            for indexer in enabled_indexers
+        )
+        else False
+    )
+    indexers = [
+        indexer
+        for indexer in enabled_indexers
+        if usenet_available or indexer.download_type != DownloadType.USENET
     ]
 
     last_rss_sync = (
@@ -60,6 +76,11 @@ def discover_downloads() -> Dict[int, List[SearchResultData]]:
             for that volume that can be downloaded.
     """
     all_releases = run(_get_all_new_releases())
+
+    indexer_types = {
+        indexer.id: indexer.download_type
+        for indexer in IndexerClients.get_all_clients()
+    }
 
     cursor = get_db()
     cursor.execute(
@@ -97,6 +118,12 @@ def discover_downloads() -> Dict[int, List[SearchResultData]]:
             )
             if match_result["match"]:
                 matched_releases.append(release)
+
+        # choose_downloads is greedy in list order, so put the preferred
+        # protocol first
+        matched_releases.sort(
+            key=lambda r: protocol_rank(indexer_types.get(r["indexer_id"]))
+        )
 
         full_matches[volume_id] = choose_downloads(
             matched_releases, volume.get_open_issues(), issue_data

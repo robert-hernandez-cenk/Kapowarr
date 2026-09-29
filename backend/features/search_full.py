@@ -3,15 +3,16 @@
 from asyncio import gather, run
 from typing import Dict, List, Set, Tuple, TypedDict, TypeVar, Union
 
-from backend.base.definitions import (IndexerClient, IssueData,
+from backend.base.definitions import (DownloadType, IndexerClient, IssueData,
                                       MatchedSearchResultData, QueryBuilder,
-                                      QueryResult, SearchAction,
+                                      QueryKeys, QueryResult, SearchAction,
                                       SearchIterationStats, SearchQuery,
                                       SearchResultData, SpecialVersion)
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import (check_overlapping_issues,
                                   extract_year_from_date, force_range)
 from backend.base.logging import LOGGER
+from backend.implementations.external_client_manager import ExternalClients
 from backend.implementations.indexer_client_manager import IndexerClients
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.query_builder_manager import QueryBuilders
@@ -23,6 +24,48 @@ class IndexerTeam(TypedDict):
     indexer: IndexerClient
     query_builder: QueryBuilder
     search_action_planner: SearchActionPlanner
+
+
+PROTOCOL_PREFERENCE: Tuple[DownloadType, ...] = (
+    DownloadType.USENET,
+    DownloadType.DDL,
+    DownloadType.TORRENT
+)
+"Order of preference of download types, for results that rank equally"
+
+
+def usenet_client_available() -> bool:
+    """Check whether there is an enabled Usenet download client. Without one,
+    results from Usenet indexers can't be downloaded. Only call this when
+    there's at least one enabled Usenet indexer, as it always queries the
+    database.
+
+    Returns:
+        bool: Whether there is an enabled Usenet client.
+    """
+    available = ExternalClients.has_enabled_client(DownloadType.USENET)
+    if not available:
+        LOGGER.debug(
+            "No enabled Usenet download client, skipping Usenet indexers"
+        )
+    return available
+
+
+def protocol_rank(download_type: Union[DownloadType, int, None]) -> int:
+    """Rank a download type for breaking ties between equally good search
+    results. Lower is better.
+
+    Args:
+        download_type (Union[DownloadType, int, None]): The download type
+            (or its value) of the indexer that the result came from.
+
+    Returns:
+        int: The rank.
+    """
+    for index, preferred_type in enumerate(PROTOCOL_PREFERENCE):
+        if preferred_type == download_type:
+            return index
+    return len(PROTOCOL_PREFERENCE)
 
 
 class SearchCoordinator:
@@ -57,8 +100,26 @@ class SearchCoordinator:
         self.is_issue_search = len(self.wanted_issues) == 1
 
         self.indexers: List[IndexerTeam] = []
-        for client in IndexerClients.get_all_clients():
-            if not client.get_indexer_data()["enabled"]:
+        enabled_clients = [
+            client
+            for client in IndexerClients.get_all_clients()
+            if client.get_indexer_data()["enabled"]
+        ]
+        # Only touch the database for the availability check when it's
+        # actually needed, so torrent/DDL-only setups never hit it.
+        usenet_available = (
+            usenet_client_available()
+            if any(
+                client.download_type == DownloadType.USENET
+                for client in enabled_clients
+            )
+            else False
+        )
+        for client in enabled_clients:
+            if (
+                client.download_type == DownloadType.USENET
+                and not usenet_available
+            ):
                 continue
 
             self.indexers.append({
@@ -192,6 +253,26 @@ class SearchCoordinator:
 
         return rating
 
+    def _sort_found_results(
+        self,
+        issue_year: Union[int, None],
+        calculated_issue_number: Union[float, None]
+    ) -> None:
+        """Sort `self.found_results` from best to worst. The protocol of the
+        result is only used to break ties.
+
+        Args:
+            issue_year (Union[int, None]): The year of the issue, if searching
+                for an issue and release date is known.
+            calculated_issue_number (Union[float, None]): The
+                calculated_issue_number of the issue, if searching for one.
+        """
+        self.found_results.sort(key=lambda r: (
+            self._rank_search_result(r, issue_year, calculated_issue_number),
+            protocol_rank(r.get("download_type"))
+        ))
+        return
+
     async def _run_iteration(self) -> List[Tuple[SearchQuery, QueryResult]]:
         """Run one iteration of the searching loop for all indexers.
 
@@ -205,11 +286,17 @@ class SearchCoordinator:
         ]
 
         # Remove indexers that should stop
-        for idx, (action, _) in list(enumerate(actions)):
-            if action == SearchAction.STOP:
-                del actions[idx]
-                await self.indexers[idx]["indexer"].shutdown()
-                del self.indexers[idx]
+        remaining_actions: List[Tuple[SearchAction, QueryKeys]] = []
+        remaining_indexers: List[IndexerTeam] = []
+        for action_and_keys, team in zip(actions, self.indexers):
+            if action_and_keys[0] == SearchAction.STOP:
+                await team["indexer"].shutdown()
+                continue
+            remaining_actions.append(action_and_keys)
+            remaining_indexers.append(team)
+
+        actions = remaining_actions
+        self.indexers = remaining_indexers
 
         queries = [
             team["query_builder"].next_query(action, query_keys)
@@ -304,7 +391,8 @@ class SearchCoordinator:
                         self.found_links.add(indexer_result['link'])
                         self.found_results.append({
                             **indexer_result,
-                            **match_result
+                            **match_result,
+                            "download_type": team["indexer"].download_type.value
                         })
 
                 team["search_action_planner"].process_stats(stats)
@@ -314,9 +402,7 @@ class SearchCoordinator:
             for indexer in self.indexers
         ))
 
-        self.found_results.sort(key=lambda r: self._rank_search_result(
-            r, issue_year, calculated_issue_number
-        ))
+        self._sort_found_results(issue_year, calculated_issue_number)
         return self.found_results
 
 

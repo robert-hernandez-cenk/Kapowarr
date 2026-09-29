@@ -7,6 +7,7 @@ from backend.base.custom_exceptions import BlocklistEntryNotFound
 from backend.base.definitions import (BlocklistEntry, BlocklistReason,
                                       BlocklistReasonID, DownloadService,
                                       GCDownloadService)
+from backend.base.helpers import redact_url_secrets
 from backend.base.logging import LOGGER
 from backend.internals.db import get_db
 
@@ -165,7 +166,8 @@ def add_to_blocklist(
 
     # Add to database
     LOGGER.info(
-        f'Adding {blocked_link} to blocklist with reason "{reason.value}"'
+        f'Adding {redact_url_secrets(blocked_link)} to blocklist with reason '
+        f'"{reason.value}"'
     )
 
     reason_id = BlocklistReasonID[reason.name].value

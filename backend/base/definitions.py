@@ -485,6 +485,7 @@ class BrokenClientReason(BaseEnum):
     Access denied not because credentials are invalid but because,
     e.g., Mega failed to log in anonymously or a webpage is blocked by CF
     """
+    MISSING_CATEGORY = "missing_category"
 
 
 class EnqueuingDownloadFailureReason(BaseEnum):
@@ -500,12 +501,16 @@ class EnqueuingDownloadFailureReason(BaseEnum):
     LINK_BROKEN = "link_broken"
     LINK_RATE_LIMITED = "link_rate_limited"
 
+    # Usenet
+    NO_USENET_CLIENT = "no_usenet_client"
+
 
 class DownloadType(BaseEnum):
     "The download protocol (download type)"
 
     DDL = 1
     TORRENT = 2
+    USENET = 3
 
 
 class IndexerClientField(BaseEnum):
@@ -527,6 +532,13 @@ class IndexerClientField(BaseEnum):
     Only applicable for the GC client. Whether to avoid downloads if they're
     over 400MB.
     """
+
+    # Newznab
+    API_KEY = "api_key"
+    "The API key for the indexer account"
+
+    CATEGORIES = "categories"
+    "The (comma separated) category IDs to search in"
 
 
 class SearchAction(BaseEnum):
@@ -597,6 +609,9 @@ class DownloadService(BaseEnum):
     GETCOMICS_TORRENT = "GetComics (torrent)"
     "A torrent magnet link directly on the webpage"
 
+    USENET = "Usenet"
+    "An NZB from a Usenet indexer"
+
 
 class DownloadClientIdentifier(BaseEnum):
     "The database identifiers for the download clients"
@@ -609,6 +624,7 @@ class DownloadClientIdentifier(BaseEnum):
     PIXELDRAIN = "pd"
     PIXELDRAIN_FOLDER = "pd_folder"
     TORRENT = "torrent"
+    USENET = "usenet"
     WETRANSFER = "wt"
 
 
@@ -688,6 +704,8 @@ class IndexerClientData(TypedDict):
     url: str
     gc_service_preference: Union['CommaList', None]
     gc_avoid_large_downloads: Union[bool, None]
+    api_key: Union[str, None]
+    categories: Union['CommaList', None]
 
 
 class SearchQuery(TypedDict):
@@ -715,6 +733,8 @@ class MatchedSearchResultData(
     total=False
 ):
     _issue_number: Union[float, Tuple[float, float]]
+    download_type: int
+    "The `DownloadType` value of the indexer that the result came from"
 
 
 class IssueMetadata(TypedDict):
