@@ -1312,3 +1312,11 @@ def _migrate_remove_search_all_task() -> None:
     )
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(51)
+def _migrate_add_usenet_indexer_fields() -> None:
+    cursor = get_db()
+    cursor.execute("ALTER TABLE indexer_clients ADD COLUMN api_key TEXT;")
+    cursor.execute("ALTER TABLE indexer_clients ADD COLUMN categories TEXT;")
+    return
