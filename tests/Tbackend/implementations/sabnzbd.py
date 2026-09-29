@@ -147,7 +147,8 @@ class sabnzbd_client(unittest.TestCase):
         nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
         api = MagicMock(return_value={"status": True, "nzo_ids": ["nzo_new"]})
         with patch.object(SABnzbd, "_api", api), \
-                patch(f"{MODULE}.pop_cached_nzb", return_value=nzb):
+                patch(f"{MODULE}.fetch_nzb", return_value=nzb), \
+                patch(f"{MODULE}.pop_cached_nzb"):
             nzo_id = client.add_download(
                 "https://idx/a.nzb", "/downloads", "Batman Issue 001"
             )
@@ -156,21 +157,21 @@ class sabnzbd_client(unittest.TestCase):
         api.assert_called_once()
         self.assertEqual(api.call_args.args[3]["mode"], "addfile")
 
-    def test_add_download_uploads_cached_nzb(self):
+    def test_add_download_uploads_fetched_nzb(self):
         client = make_client()
         nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
         api = MagicMock(side_effect=[
             {"status": True, "nzo_ids": ["nzo_new"]}
         ])
         with patch.object(SABnzbd, "_api", api), \
-                patch(f"{MODULE}.pop_cached_nzb", return_value=nzb), \
-                patch(f"{MODULE}.fetch_nzb") as fetch:
+                patch(f"{MODULE}.fetch_nzb", return_value=nzb) as fetch, \
+                patch(f"{MODULE}.pop_cached_nzb"):
             nzo_id = client.add_download(
                 "https://idx/a.nzb", "/downloads", "Batman Issue 001"
             )
 
         self.assertEqual(nzo_id, "nzo_new")
-        fetch.assert_not_called()
+        fetch.assert_called_once_with("https://idx/a.nzb")
         args, kwargs = api.call_args
         params = args[3]
         self.assertEqual(params["mode"], "addfile")
@@ -181,15 +182,31 @@ class sabnzbd_client(unittest.TestCase):
             ("Batman 001.nzb", b"<nzb/>", "application/x-nzb")
         )
 
+    def test_add_download_pops_nzb_only_after_success(self):
+        client = make_client()
+        nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
+        api = MagicMock(return_value={"status": True, "nzo_ids": ["nzo_new"]})
+        with patch.object(SABnzbd, "_api", api), \
+                patch(f"{MODULE}.fetch_nzb", return_value=nzb), \
+                patch(f"{MODULE}.pop_cached_nzb") as pop:
+            client.add_download(
+                "https://idx/a.nzb", "/downloads", "Batman Issue 001"
+            )
+
+        pop.assert_called_once_with("https://idx/a.nzb")
+
     def test_add_download_fails_without_nzo_id(self):
         client = make_client()
         nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
         with patch.object(
             SABnzbd, "_api",
             side_effect=[{"status": False}]
-        ), patch(f"{MODULE}.pop_cached_nzb", return_value=nzb):
+        ), patch(f"{MODULE}.fetch_nzb", return_value=nzb), \
+                patch(f"{MODULE}.pop_cached_nzb") as pop:
             with self.assertRaises(ClientNotWorking):
                 client.add_download("https://idx/a.nzb", "/downloads", "X")
+
+        pop.assert_not_called()
 
     def test_delete_download_calls_queue_and_history(self):
         client = make_client()

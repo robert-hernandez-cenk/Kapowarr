@@ -217,9 +217,11 @@ class SABnzbd(BaseExternalClient):
         target_folder: str,
         download_name: Union[str, None]
     ) -> str:
-        # The target folder is decided by the category in SABnzbd
-        nzb = pop_cached_nzb(download_link) or fetch_nzb(download_link)
-        pop_cached_nzb(download_link)
+        # The target folder is decided by the category in SABnzbd.
+        # Keep the NZB cached until the upload actually succeeds, so that a
+        # retry after a connection error doesn't grab it from the indexer
+        # again.
+        nzb = fetch_nzb(download_link)
 
         params: Dict[str, Any] = {
             "mode": "addfile",
@@ -240,6 +242,8 @@ class SABnzbd(BaseExternalClient):
             raise ClientNotWorking(
                 BrokenClientReason.FAILED_PROCESSING_RESPONSE
             )
+
+        pop_cached_nzb(download_link)
 
         # Make the first status check fetch fresh data
         self.last_update = 0.0

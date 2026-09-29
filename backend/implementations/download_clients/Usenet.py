@@ -10,7 +10,8 @@ from backend.base.custom_exceptions import (ClientNotWorking,
                                             EnqueuingDownloadFailure,
                                             ExternalClientNotFound,
                                             IssueNotFound)
-from backend.base.definitions import (DownloadClientIdentifier,
+from backend.base.definitions import (BrokenClientReason,
+                                      DownloadClientIdentifier,
                                       DownloadService, DownloadState,
                                       DownloadType,
                                       EnqueuingDownloadFailureReason,
@@ -154,8 +155,11 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
     def _add_to_client(self) -> None:
         """Add the download to the external client, or pick up the job that
         is already there if the download was restored from the database.
-        If the client can't be reached, `external_id` stays `None` and the
-        state stays QUEUED, so that a later status check tries again.
+        If the client is unreachable or the credentials are wrong,
+        `external_id` stays `None` and the state stays QUEUED, so that a
+        later status check tries again. Any other rejection by the client
+        (e.g. a duplicate or a bad NZB) fails the download instead, so it
+        isn't retried and re-grabbed from the indexer forever.
         """
         try:
             if (
@@ -184,11 +188,26 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         except DownloadLinkBroken:
             self._state = DownloadState.FAILED_STATE
 
-        except (ClientNotWorking, CredentialInvalid):
+        except CredentialInvalid:
             LOGGER.warning(
                 "Can't add Usenet download to the client, will try again: %s",
                 self.title
             )
+
+        except ClientNotWorking as e:
+            if e.reason == BrokenClientReason.CONNECTION_ERROR:
+                LOGGER.warning(
+                    "Can't add Usenet download to the client, "
+                    "will try again: %s",
+                    self.title
+                )
+            else:
+                LOGGER.warning(
+                    "Usenet download was rejected by the client, "
+                    "won't try again: %s",
+                    self.title
+                )
+                self._state = DownloadState.FAILED_STATE
 
         return
 

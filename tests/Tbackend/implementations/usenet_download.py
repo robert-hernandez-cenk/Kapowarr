@@ -113,6 +113,49 @@ class usenet_download_outages(unittest.TestCase):
         self.assertEqual(client.add_download.call_count, 2)
         self.assertEqual(download.external_id, "nzo_9")
 
+    def test_rejected_download_is_failed_and_not_retried(self):
+        client = MagicMock()
+        client.id = 3
+        client.add_download.side_effect = ClientNotWorking(
+            BrokenClientReason.FAILED_PROCESSING_RESPONSE
+        )
+        download = make_download(client)
+        download._external_id = None
+        download._state = DownloadState.QUEUED_STATE
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.LOGGER") as logger:
+            download.run()
+
+        self.assertIsNone(download.external_id)
+        self.assertEqual(download.state, DownloadState.FAILED_STATE)
+        self.assertWarnedWithoutLink(logger)
+        client.add_download.assert_called_once()
+
+    def test_connection_error_retries_without_regrabbing(self):
+        client = MagicMock()
+        client.id = 3
+        client.add_download.side_effect = [
+            ClientNotWorking(BrokenClientReason.CONNECTION_ERROR), "nzo_9"
+        ]
+        download = make_download(client)
+        download._external_id = None
+        download._state = DownloadState.QUEUED_STATE
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.LOGGER"):
+            download.run()
+
+        self.assertIsNone(download.external_id)
+        self.assertEqual(download.state, DownloadState.QUEUED_STATE)
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.LOGGER"):
+            download.update_status()
+
+        self.assertEqual(client.add_download.call_count, 2)
+        self.assertEqual(download.external_id, "nzo_9")
+
     def test_failed_download_is_not_retried(self):
         client = MagicMock()
         download = make_download(client)
