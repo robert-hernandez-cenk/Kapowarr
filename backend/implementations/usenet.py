@@ -14,7 +14,7 @@ from requests.exceptions import RequestException
 from requests.structures import CaseInsensitiveDict
 
 from backend.base.custom_exceptions import DownloadLinkBroken
-from backend.base.helpers import Session
+from backend.base.helpers import Session, redact_url_secrets
 from backend.base.logging import LOGGER
 
 NZB_NAMESPACE = "http://www.newzbin.com/DTD/2003/nzb"
@@ -23,26 +23,6 @@ content_disposition_filename_regex = compile(
     r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?',
     IGNORECASE
 )
-nzb_apikey_regex = compile(
-    r'(?:^|(?<=[?&]))(apikey|api_key|r|i)=([^&\s]+)',
-    IGNORECASE
-)
-
-
-def redact_nzb_link(link: str) -> str:
-    """Redact sensitive parameters from an NZB indexer link.
-
-    Masks the values of apikey, api_key, r, and i parameters (case-insensitive)
-    that appear as name=value pairs in the query string. Only redacts whole
-    parameter names (not partial matches within other parameter names).
-
-    Args:
-        link (str): The NZB link, possibly containing sensitive parameters.
-
-    Returns:
-        str: The link with sensitive parameter values replaced with <redacted>.
-    """
-    return nzb_apikey_regex.sub(r'\1=<redacted>', link)
 
 
 @dataclass(frozen=True)
@@ -148,10 +128,10 @@ def fetch_nzb(link: str) -> NzbFile:
             response = session.get(link)
 
     except RequestException:
-        raise DownloadLinkBroken(redact_nzb_link(link))
+        raise DownloadLinkBroken(redact_url_secrets(link))
 
     if not response.ok or not is_nzb(response.content):
-        raise DownloadLinkBroken(redact_nzb_link(link))
+        raise DownloadLinkBroken(redact_url_secrets(link))
 
     name = (
         extract_nzb_name(response.headers, response.content)

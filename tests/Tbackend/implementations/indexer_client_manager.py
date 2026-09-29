@@ -10,6 +10,8 @@ from backend.implementations.indexer_client_manager import (
 from backend.internals.db import get_db
 from backend.internals.db_migration import DatabaseMigrationHandler
 
+MODULE = "backend.implementations.indexer_client_manager"
+
 
 class validate_usenet_fields(unittest.TestCase):
     def test_categories_string_is_normalised(self):
@@ -96,3 +98,29 @@ class indexer_usenet_columns(unittest.TestCase):
                 IndexerClients.get_client(1).get_indexer_data()["title"],
                 "GetComics Renamed"
             )
+
+
+class indexer_logging(unittest.TestCase):
+    def assertKeyNotLogged(self, logger):
+        self.assertTrue(logger.info.called)
+        for call in logger.info.call_args_list:
+            self.assertNotIn("SECRETKEY", " ".join(map(str, call.args)))
+
+    def test_add_and_update_do_not_log_api_key(self):
+        IndexerClients.trigger_client_registration()
+        ClientClass = IndexerClients.clients[DownloadType.USENET]["Newznab"]
+        with TempDatabase(), \
+                patch.object(ClientClass, "test"), \
+                patch(f"{MODULE}.LOGGER") as logger:
+            client = IndexerClients.add(
+                DownloadType.USENET, "Newznab", True, "NZBIdx",
+                "https://idx", api_key="SECRETKEY", categories="7030"
+            )
+            self.assertKeyNotLogged(logger)
+
+            logger.reset_mock()
+            client.update_indexer({
+                "title": "NZBIdx", "enabled": True, "url": "https://idx",
+                "api_key": "SECRETKEY", "categories": "7030"
+            })
+            self.assertKeyNotLogged(logger)

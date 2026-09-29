@@ -13,15 +13,31 @@ from backend.base.custom_exceptions import (AddingIndexerForbidden,
                                             ClientNotWorking,
                                             CredentialInvalid, IndexerNotFound,
                                             InvalidKeyValue, KeyNotFound)
-from backend.base.definitions import (ClientTestResult, DownloadType,
-                                      GCDownloadService, IndexerClient,
-                                      IndexerClientData, IndexerClientField)
+from backend.base.definitions import (ClientTestResult, Constants,
+                                      DownloadType, GCDownloadService,
+                                      IndexerClient, IndexerClientData,
+                                      IndexerClientField)
 from backend.base.files import list_files
 from backend.base.helpers import CommaList, normalise_base_url
 from backend.base.logging import LOGGER
 from backend.internals.db import get_db
 
 ICF = IndexerClientField
+
+
+def _redact_api_key(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Get a copy of indexer data that is safe to log.
+
+    Args:
+        data (Mapping[str, Any]): The indexer data.
+
+    Returns:
+        Dict[str, Any]: A copy with the API key, if any, replaced.
+    """
+    result = dict(data)
+    if result.get('api_key') is not None:
+        result['api_key'] = Constants.CREDENTIAL_REPLACEMENT
+    return result
 
 
 def _validate_indexer_data(
@@ -192,7 +208,9 @@ class BaseIndexerClient(IndexerClient):
         }
 
     def update_indexer(self, data: Mapping[str, Any]) -> None:
-        LOGGER.info(f"Updating indexer {self._id}: {data}")
+        LOGGER.info(
+            f"Updating indexer {self._id}: {_redact_api_key(data)}"
+        )
         filtered_data = _validate_indexer_data(data, self.required_tokens)
 
         # Raises exception on fail
@@ -466,7 +484,8 @@ class IndexerClients:
             **extra_fields
         }
         LOGGER.info(
-            f"Adding indexer: {download_type=}, {client_type=}, {data=}"
+            f"Adding indexer: {download_type=}, {client_type=}, "
+            f"data={_redact_api_key(data)}"
         )
         filtered_data = _validate_indexer_data(
             data,

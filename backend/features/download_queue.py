@@ -22,7 +22,7 @@ from backend.base.definitions import (BlocklistReason, Constants, Download,
                                       EnqueuingDownloadFailureReason,
                                       ExternalDownload, SeedingHandling)
 from backend.base.files import create_folder, delete_file_folder
-from backend.base.helpers import CommaList, Singleton
+from backend.base.helpers import CommaList, Singleton, redact_url_secrets
 from backend.base.logging import LOGGER
 from backend.features.post_processing import (PostProcessor,
                                               PostProcessorTorrentsComplete,
@@ -199,7 +199,7 @@ class DownloadHandler(metaclass=Singleton):
         LOGGER.info(
             'Adding download for ' +
             f'volume {volume_id}{f" issue {issue_id}" if issue_id else ""}: ' +
-            f'{link}'
+            f'{redact_url_secrets(link)}'
         )
 
         if self.link_in_queue(link):

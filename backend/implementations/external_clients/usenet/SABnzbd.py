@@ -156,7 +156,7 @@ class SABnzbd(BaseExternalClient):
             )
 
         except RequestException:
-            LOGGER.exception("Can't connect to SABnzbd instance: ")
+            LOGGER.error("Can't connect to SABnzbd instance at %s", base_url)
             raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
 
         try:

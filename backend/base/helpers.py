@@ -14,7 +14,7 @@ from hashlib import pbkdf2_hmac
 from multiprocessing.pool import Pool
 from os import cpu_count, environ, sep
 from os.path import basename, dirname, exists, isfile, join
-from re import compile
+from re import IGNORECASE, compile
 from subprocess import run
 from sys import base_exec_prefix, executable, maxsize, platform, version_info
 from threading import current_thread
@@ -627,6 +627,28 @@ def normalise_base_url(base_url: str) -> str:
     return result
 
 
+url_secret_regex = compile(
+    r'(?:^|(?<=[?&]))(apikey|api_key|r|i)=([^&\s]+)',
+    IGNORECASE
+)
+
+
+def redact_url_secrets(url: str) -> str:
+    """Redact sensitive parameters from a URL, like an NZB indexer link.
+
+    Masks the values of apikey, api_key, r, and i parameters (case-insensitive)
+    that appear as name=value pairs in the query string. Only redacts whole
+    parameter names (not partial matches within other parameter names).
+
+    Args:
+        url (str): The URL, possibly containing sensitive parameters.
+
+    Returns:
+        str: The URL with sensitive parameter values replaced with <redacted>.
+    """
+    return url_secret_regex.sub(r'\1=<redacted>', url)
+
+
 def extract_year_from_date(
     date: Union[str, None],
     default: T = None
@@ -1028,13 +1050,13 @@ class Session(RSession):
             LOGGER.warning(
                 "%s request to %s returned with code %d",
                 result.request.method,
-                result.request.url,
+                redact_url_secrets(str(result.request.url)),
                 result.status_code
             )
             LOGGER.debug(
                 "Request response for %s %s: %s",
                 result.request.method,
-                result.request.url,
+                redact_url_secrets(str(result.request.url)),
                 result.text
             )
 
@@ -1079,7 +1101,7 @@ class AsyncSession(ClientSession):
                 response = await super()._request(*args, **kwargs)
                 LOGGER.debug(
                     'Made async request: %s "%s" %d %d',
-                    method, response.url,
+                    method, redact_url_secrets(str(response.url)),
                     response.status,
                     int(response.headers.get('Content-Length', -1))
                 )
@@ -1094,7 +1116,7 @@ class AsyncSession(ClientSession):
 
                 LOGGER.warning(
                     "%s request failed for url %s. Retrying for round %d...",
-                    method, url, round + 1
+                    method, redact_url_secrets(str(url)), round + 1
                 )
 
                 await sleep(sleep_time)
@@ -1121,7 +1143,7 @@ class AsyncSession(ClientSession):
             if 400 <= response.status < 500:
                 LOGGER.warning(
                     "%s request to %s returned with code %d",
-                    method, url, response.status
+                    method, redact_url_secrets(str(url)), response.status
                 )
                 LOGGER.debug(
                     "Request response for %s %s: %s",
