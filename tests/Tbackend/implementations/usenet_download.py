@@ -13,6 +13,7 @@ from backend.base.definitions import (BlocklistReason,
 from backend.implementations.download_clients.Usenet import UsenetDownload
 from backend.implementations.download_preppers.usenet.Newznab import \
     NewznabPrepper
+from backend.implementations.external_clients.usenet.SABnzbd import SABnzbd
 from backend.implementations.usenet import NzbFile
 
 DOWNLOAD_MODULE = "backend.implementations.download_clients.Usenet"
@@ -34,6 +35,7 @@ def make_download(client):
     download._title = "Batman"
     download._sleep_event = Event()
     download._missing_path_logged = False
+    download._restored = False
     return download
 
 
@@ -114,6 +116,72 @@ class usenet_download(unittest.TestCase):
             download.run()
 
         self.assertEqual(download.external_id, "nzo_9")
+
+    def test_restored_download_reuses_existing_job(self):
+        client = MagicMock(spec=SABnzbd)
+        client.id = 3
+        client.find_download.return_value = "nzo_existing"
+        download = make_download(client)
+        download._external_id = None
+        download._restored = True
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"), \
+                patch(f"{DOWNLOAD_MODULE}.pop_cached_nzb") as pop:
+            download.run()
+
+        client.find_download.assert_called_once_with("Batman")
+        client.add_download.assert_not_called()
+        pop.assert_called_once_with(LINK)
+        self.assertEqual(download.external_id, "nzo_existing")
+
+    def test_restored_download_without_job_is_added(self):
+        client = MagicMock(spec=SABnzbd)
+        client.id = 3
+        client.find_download.return_value = None
+        client.add_download.return_value = "nzo_9"
+        download = make_download(client)
+        download._external_id = None
+        download._restored = True
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"):
+            download.run()
+
+        client.add_download.assert_called_once()
+        self.assertEqual(download.external_id, "nzo_9")
+
+    def test_new_download_always_adds(self):
+        client = MagicMock(spec=SABnzbd)
+        client.id = 3
+        client.find_download.return_value = "nzo_existing"
+        client.add_download.return_value = "nzo_9"
+        download = make_download(client)
+        download._external_id = None
+
+        with patch(f"{DOWNLOAD_MODULE}.RemoteMappings"):
+            download.run()
+
+        client.find_download.assert_not_called()
+        client.add_download.assert_called_once()
+        self.assertEqual(download.external_id, "nzo_9")
+
+    def test_restored_flag(self):
+        kwargs = dict(
+            download_link=LINK, volume_id=1, covered_issues=1.0,
+            download_service=DownloadService.USENET,
+            source_name="NZBIdx", web_link=None,
+            web_title="Batman 001", web_sub_title=None
+        )
+        with patch(f"{DOWNLOAD_MODULE}.Settings"), \
+                patch(f"{DOWNLOAD_MODULE}.Volume"), \
+                patch(f"{DOWNLOAD_MODULE}.ExternalClients"), \
+                patch(f"{DOWNLOAD_MODULE}.clean_filestring",
+                      return_value="Batman 001"), \
+                patch(f"{DOWNLOAD_MODULE}.generate_issue_name",
+                      return_value="Batman 001"):
+            self.assertFalse(UsenetDownload(**kwargs)._restored)
+            self.assertTrue(
+                UsenetDownload(**kwargs, external_client=MagicMock())._restored
+            )
 
     def test_no_usenet_client(self):
         with patch(f"{DOWNLOAD_MODULE}.Settings"), \

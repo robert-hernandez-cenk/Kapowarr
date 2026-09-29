@@ -118,24 +118,48 @@ class sabnzbd_client(unittest.TestCase):
         self.assertEqual(first["state"], DownloadState.QUEUED_STATE)
         self.assertIsNone(second)
 
-    def test_add_download_reuses_existing_job(self):
+    def test_find_download_returns_job_id(self):
         client = make_client()
-        with patch.object(SABnzbd, "_api", side_effect=[QUEUE_JSON, HISTORY_JSON]), \
-                patch(f"{MODULE}.fetch_nzb") as fetch, \
-                patch(f"{MODULE}.pop_cached_nzb") as pop:
+        with patch.object(
+            SABnzbd, "_api", side_effect=[QUEUE_JSON, HISTORY_JSON]
+        ):
+            self.assertEqual(client.find_download("Batman Issue 003"), "nzo_c")
+
+    def test_find_download_ignores_category(self):
+        client = make_client()
+        queue = {"queue": {"kbpersec": "0", "slots": [
+            {"nzo_id": "nzo_x", "filename": "Batman Issue 009", "cat": "*",
+             "status": "Queued", "mb": "1", "percentage": "0"}
+        ]}}
+        with patch.object(SABnzbd, "_api", side_effect=[queue, EMPTY_HISTORY]):
+            self.assertEqual(client.find_download("Batman Issue 009"), "nzo_x")
+
+    def test_find_download_without_match(self):
+        client = make_client()
+        with patch.object(
+            SABnzbd, "_api", side_effect=[QUEUE_JSON, HISTORY_JSON]
+        ):
+            self.assertIsNone(client.find_download("Superman Issue 001"))
+
+    def test_add_download_uploads_even_with_same_name_job(self):
+        client = make_client()
+        client.jobs = parse_sab_jobs(QUEUE_JSON, HISTORY_JSON)
+        nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
+        api = MagicMock(return_value={"status": True, "nzo_ids": ["nzo_new"]})
+        with patch.object(SABnzbd, "_api", api), \
+                patch(f"{MODULE}.pop_cached_nzb", return_value=nzb):
             nzo_id = client.add_download(
                 "https://idx/a.nzb", "/downloads", "Batman Issue 001"
             )
 
-        self.assertEqual(nzo_id, "nzo_a")
-        fetch.assert_not_called()
-        pop.assert_called_once_with("https://idx/a.nzb")
+        self.assertEqual(nzo_id, "nzo_new")
+        api.assert_called_once()
+        self.assertEqual(api.call_args.args[3]["mode"], "addfile")
 
     def test_add_download_uploads_cached_nzb(self):
         client = make_client()
         nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
         api = MagicMock(side_effect=[
-            EMPTY_QUEUE, EMPTY_HISTORY,
             {"status": True, "nzo_ids": ["nzo_new"]}
         ])
         with patch.object(SABnzbd, "_api", api), \
@@ -162,7 +186,7 @@ class sabnzbd_client(unittest.TestCase):
         nzb = NzbFile("Batman 001", "Batman 001.nzb", b"<nzb/>")
         with patch.object(
             SABnzbd, "_api",
-            side_effect=[EMPTY_QUEUE, EMPTY_HISTORY, {"status": False}]
+            side_effect=[{"status": False}]
         ), patch(f"{MODULE}.pop_cached_nzb", return_value=nzb):
             with self.assertRaises(ClientNotWorking):
                 client.add_download("https://idx/a.nzb", "/downloads", "X")

@@ -2,7 +2,7 @@
 
 from os.path import basename, exists, join
 from threading import Event
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Protocol, Tuple, Union, runtime_checkable
 
 from backend.base.custom_exceptions import (DownloadLinkBroken,
                                             EnqueuingDownloadFailure,
@@ -20,8 +20,20 @@ from backend.implementations.external_client_manager import ExternalClients
 from backend.implementations.naming import (clean_filestring,
                                             generate_issue_name)
 from backend.implementations.remote_mapping import RemoteMappings
+from backend.implementations.usenet import pop_cached_nzb
 from backend.implementations.volumes import Volume
 from backend.internals.settings import Settings
+
+
+@runtime_checkable
+class FindsDownloadsByName(Protocol):
+    """
+    An external client that can find a download by name. Used to pick up a job
+    again after a restart, instead of adding it a second time.
+    """
+
+    def find_download(self, name: str) -> Union[str, None]:
+        ...
 
 
 @DownloadClients.register_client(DownloadClientIdentifier.USENET)
@@ -87,6 +99,8 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         self._missing_path_logged = False
 
         self._external_id: Union[str, None] = None
+        # A download restored from the database is given its client
+        self._restored = external_client is not None
         if external_client:
             self._external_client = external_client
         else:
@@ -132,6 +146,19 @@ class UsenetDownload(ExternalDownload, BaseDirectDownload):
         return
 
     def run(self) -> None:
+        if (
+            self._restored
+            and isinstance(self.external_client, FindsDownloadsByName)
+        ):
+            existing_id = self.external_client.find_download(self.title)
+            if existing_id:
+                LOGGER.info(
+                    "Download already in client, reusing job: %s", self.title
+                )
+                self._external_id = existing_id
+                pop_cached_nzb(self.download_link)
+                return
+
         try:
             self._external_id = self.external_client.add_download(
                 self.download_link,

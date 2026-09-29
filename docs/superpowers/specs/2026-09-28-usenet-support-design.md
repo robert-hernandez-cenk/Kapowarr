@@ -136,8 +136,8 @@ Registered as `(DownloadType.USENET, "SABnzbd", (TITLE, ENABLED, BASE_URL, API_T
 
 **`add_download(link, target_folder, name)`**
 
-- **Idempotent.** It first refreshes the queue and history. If a `kapowarr`-category job with the same name exists, it returns that job's `nzo_id`.
-  - This matters because on a Kapowarr restart `__load_downloads` rebuilds each download and calls `run()` again. qBittorrent de-duplicates by hash, but SABnzbd would add a duplicate job.
+- **Idempotent for restored downloads only.** `add_download` itself always uploads. Dedupe happens only for downloads restored from the database: such a `UsenetDownload` first calls `SABnzbd.find_download(title)` (a refresh, then a match on the job name in the queue or history, with no category requirement), and if a job is found it reuses that `nzo_id` instead of adding.
+  - This matters because on a Kapowarr restart `__load_downloads` rebuilds each download and calls `run()` again. qBittorrent de-duplicates by hash, but SABnzbd would add a duplicate job. New downloads never dedupe, so a fresh grab with a coincidentally matching name is always added.
 - Otherwise it takes the NZB from the cache (or fetches it again), uploads it with `mode=addfile` (`cat=kapowarr`, `nzbname={name}`), and returns `nzo_ids[0]`.
 - Raises `ClientNotWorking` if `status` is false or no `nzo_id` is returned.
 - `target_folder` is ignored. SABnzbd's `kapowarr` category controls where files land, and the user sets up that category in SABnzbd. The client Test fails when the `kapowarr` category is missing, and the history is read unfiltered so a job is never lost to a category mismatch.

@@ -195,13 +195,19 @@ class SABnzbd(BaseExternalClient):
         self.last_update = time()
         return
 
-    def _find_job_by_name(self, name: str) -> Union[str, None]:
+    def find_download(self, name: str) -> Union[str, None]:
+        """Find a job in SABnzbd by its name, in the queue or the history.
+
+        Args:
+            name (str): The name of the job.
+
+        Returns:
+            Union[str, None]: The `nzo_id` of the job, or `None` if there is
+                no job with that name.
+        """
         self._refresh()
         for nzo_id, job in self.jobs.items():
-            if (
-                job["name"] == name
-                and job["category"] == Constants.EXTERNAL_DOWNLOAD_TAG
-            ):
+            if job["name"] == name:
                 return nzo_id
         return None
 
@@ -212,17 +218,6 @@ class SABnzbd(BaseExternalClient):
         download_name: Union[str, None]
     ) -> str:
         # The target folder is decided by the category in SABnzbd
-
-        if download_name:
-            existing_id = self._find_job_by_name(download_name)
-            if existing_id:
-                LOGGER.info(
-                    "Download already in SABnzbd, reusing job: %s",
-                    download_name
-                )
-                pop_cached_nzb(download_link)
-                return existing_id
-
         nzb = pop_cached_nzb(download_link) or fetch_nzb(download_link)
         pop_cached_nzb(download_link)
 
